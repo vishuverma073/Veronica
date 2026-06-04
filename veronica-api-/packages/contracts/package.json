@@ -1,6 +1,6 @@
 {
   "name": "@veronica/contracts",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "type": "module",
   "description": "Shared zod schemas and TypeScript types for the Veronica API and web client.",
   "main": "./dist/index.js",

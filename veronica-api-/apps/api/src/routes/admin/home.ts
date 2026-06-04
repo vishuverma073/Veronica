@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { HomeConfigSchema } from "@veronica/contracts";
+import { HomeConfigSchema, type HomeSection } from "@veronica/contracts";
 import type { DbClient } from "../../db/client.js";
 import { homeConfig } from "../../db/schema.js";
 import { makeRequireAdmin } from "../../middleware/auth.js";
 import { logAudit } from "../../lib/audit.js";
+import { DEFAULT_HOME_SECTIONS } from "../../lib/home-defaults.js";
 import type { AppEnv } from "../../lib/types.js";
 
 export function makeAdminHomeRouter(db: DbClient) {
@@ -12,12 +13,16 @@ export function makeAdminHomeRouter(db: DbClient) {
   router.use("*", makeRequireAdmin(db));
 
   // GET /admin/home — raw config (includes disabled sections) for editing.
+  // Falls back to the default layout when nothing has been saved yet, so the
+  // composer always opens on a sensible starting point.
   router.get("/", async (c) => {
     const [row] = await db.select().from(homeConfig).where(eq(homeConfig.id, 1)).limit(1);
-    return c.json(HomeConfigSchema.parse({ sections: row?.sections ?? [] }));
+    const sections = (row?.sections as HomeSection[] | undefined) ?? [];
+    return c.json(HomeConfigSchema.parse({ sections: sections.length > 0 ? sections : DEFAULT_HOME_SECTIONS }));
   });
 
-  // PUT /admin/home — atomic replace of the whole config.
+  // PUT /admin/home — atomic replace of the whole config (upsert: the singleton
+  // row may not exist yet on a fresh install).
   router.put("/", async (c) => {
     const parsed = HomeConfigSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
@@ -27,9 +32,12 @@ export function makeAdminHomeRouter(db: DbClient) {
     const [before] = await db.select().from(homeConfig).where(eq(homeConfig.id, 1)).limit(1);
 
     await db
-      .update(homeConfig)
-      .set({ sections: parsed.data.sections, updatedAt: new Date(), updatedBy: adminUserId })
-      .where(eq(homeConfig.id, 1));
+      .insert(homeConfig)
+      .values({ id: 1, sections: parsed.data.sections, updatedAt: new Date(), updatedBy: adminUserId })
+      .onConflictDoUpdate({
+        target: homeConfig.id,
+        set: { sections: parsed.data.sections, updatedAt: new Date(), updatedBy: adminUserId },
+      });
 
     await logAudit(db, {
       actorUserId: adminUserId,

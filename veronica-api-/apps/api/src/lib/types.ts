@@ -12,5 +12,8 @@ export interface AppEnv {
     requestId: string;
     adminUserId?: string;
     adminUser?: AdminUserRecord;
+    // Customer auth (Phase 3), set by requireAuth.
+    userId?: string;
+    isAdmin?: boolean;
   };
 }

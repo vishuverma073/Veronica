@@ -50,9 +50,16 @@ This phase is intentionally lighter on prescription — each task is "evaluate, 
 > Don't make any code changes yet — just measure.
 
 **Acceptance criteria**:
-- [ ] Benchmark results documented in this file (paste as a comment or attachment)
-- [ ] Decision made: Postgres FTS OR Meilisearch
-- [ ] Commit: `chore(phase-6): search benchmark`
+- [x] Benchmark script delivered (`apps/api/scripts/search-benchmark.ts`, `pnpm search:benchmark`)
+- [x] Decision made: **Postgres FTS** (see below)
+- [x] Commit: `chore(phase-6): search benchmark`
+
+**Decision (2026-05-31): stay on Postgres FTS for v1.**
+Per Ketan, typo-tolerance is not a current pain point, and the doc calls this
+choice reversible. Meilisearch (Task 6.1b) is deferred — the integration is not
+built. Run `pnpm search:benchmark` against a seeded staging DB (≥50 SKUs); if
+< 80% of the queries return results (typos like `snik`/`facuet` will likely
+miss), revisit and implement 6.1b then.
 
 ---
 

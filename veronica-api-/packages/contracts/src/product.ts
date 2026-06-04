@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { IdSchema, PriceSchema, SlugSchema, TimestampSchema, UrlSchema } from "./common.js";
 import { SkuSchema } from "./sku.js";
+import { ProductStructuredDataSchema } from "./seo.js";
 
 /** One selectable value within a variant dimension (e.g. "24×18×9" under "Size"). */
 export const DimensionValueSchema = z.object({
@@ -56,6 +57,8 @@ export const ProductSchema = z.object({
   includedAccessories: z.array(z.string()).optional(),
   createdAt: TimestampSchema.optional(),
   updatedAt: TimestampSchema.optional(),
+  /** Pre-computed schema.org/Product JSON-LD (Phase 6) — present on detail responses. */
+  structuredData: ProductStructuredDataSchema.optional(),
 });
 export type Product = z.infer<typeof ProductSchema>;
 
@@ -71,7 +74,9 @@ export const ProductListItemSchema = z.object({
   tags: z.array(z.string()),
   image: UrlSchema.nullable(),
   minPrice: PriceSchema,
-  maxPrice: PriceSchema,
+  maxBasePrice: PriceSchema,
+  /** Best discount across SKUs, as a whole-number percentage. */
+  bestDiscount: z.number().int(),
 });
 export type ProductListItem = z.infer<typeof ProductListItemSchema>;
 

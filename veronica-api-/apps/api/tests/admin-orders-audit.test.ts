@@ -41,18 +41,19 @@ function adminDb(): DbClient {
         }),
       }),
     }),
+    query: { orders: { findMany: async () => [] } }, // order-list query (no orders here)
   } as unknown as DbClient;
 }
 
 const token = () => signAdminAccess({ sub: ADMIN_ID });
 
-describe("GET /admin/orders (stub)", () => {
+describe("GET /admin/orders", () => {
   it("401 without a token", async () => {
     const res = await createApp({ db: adminDb() }).request("/admin/orders");
     expect(res.status).toBe(401);
   });
 
-  it("returns an empty page for an admin", async () => {
+  it("returns an empty page when there are no orders", async () => {
     const res = await createApp({ db: adminDb() }).request("/admin/orders", {
       headers: { Authorization: `Bearer ${await token()}` },
     });

@@ -9,6 +9,8 @@ export const CategorySchema = z.object({
   description: z.string(),
   image: UrlSchema.optional(),
   sortOrder: z.number().int(),
+  /** Whether this category appears in the storefront header nav (admin-curated). */
+  showInHeader: z.boolean(),
 });
 export type Category = z.infer<typeof CategorySchema>;
 

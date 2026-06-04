@@ -33,13 +33,15 @@ Integration milestones are defined in [../integration-milestones.md](../integrat
 
 | Phase | Doc | Status | Estimated effort |
 |---|---|---|---|
-| 0 | [Foundations](./phase-0-foundations.md) | scaffolding done, intern wraps up | 1 session (~3 hrs) |
-| **1** | [Admin API](./phase-1-admin.md) | not started — **biggest BE phase, plan for 3 sessions** | 3 sessions (~9 hrs) |
-| 2 | [Read paths](./phase-2-read-paths.md) | not started | 1-2 sessions |
-| 3 | [Customer auth + cart + Sentry](./phase-3-auth-and-cart.md) | not started | 2 sessions |
-| 4 | [Razorpay checkout](./phase-4-razorpay.md) | not started | 2-3 sessions |
-| 5 | [Caching + remaining obs](./phase-5-caching-and-obs.md) | not started | 1-2 sessions |
-| 6 | [Search + polish](./phase-6-search-and-polish.md) | not started | 1-2 sessions |
+| 0 | [Foundations](./phase-0-foundations.md) | ✅ done | 1 session (~3 hrs) |
+| 1 | [Admin API](./phase-1-admin.md) | ✅ done | 3 sessions (~9 hrs) |
+| 2 | [Read paths](./phase-2-read-paths.md) | ✅ done | 1-2 sessions |
+| 3 | [Customer auth + cart + Sentry](./phase-3-auth-and-cart.md) | ✅ done (Sentry deferred to Phase 5) | 2 sessions |
+| **4** | [Razorpay checkout](./phase-4-razorpay.md) | ✅ done — stub/dummy Razorpay creds; real keys + publish/tag pending | 2-3 sessions |
+| **5** | [Caching + remaining obs](./phase-5-caching-and-obs.md) | ✅ done — code complete; Sentry/Axiom/BetterStack/Slack accounts pending | 1-2 sessions |
+| **6** | [Search + polish](./phase-6-search-and-polish.md) | ✅ done — Postgres FTS kept (Meili deferred); migration 0004 unapplied; contracts 1.0.0 unpublished | 1-2 sessions |
+
+**Backend v1 is code-complete (phases 0–6).** Remaining before launch: apply migration 0004, publish `@veronica/contracts@1.0.0`, wire real third-party creds (Razorpay/Sentry/Axiom/Slack/BetterStack), and run the FE integration milestones.
 
 A "session" is ~3 hours of focused intern + Claude Code work.
 
@@ -63,9 +65,18 @@ The biggest coordination boundary: the contracts package. Every schema change is
 
 ## Reference docs in this repo
 
-- [../01-data-model.md](../01-data-model.md) — Postgres schema reference
-- [../02-api-design.md](../02-api-design.md) — REST endpoint specs
-- [../03-local-dev.md](../03-local-dev.md) — local setup
-- [../04-deployment.md](../04-deployment.md) — deployment options
-- [../admin-design.md](../admin-design.md) — admin UX principles (used in Phase 1)
-- [../integration-milestones.md](../integration-milestones.md) — gate criteria between phases
+- [../admin-design.md](../admin-design.md) — admin UX principles + schema (used in Phase 1)
+- [../integration-milestones.md](../integration-milestones.md) — M0–M6 gate criteria between phases
+- [../v1.5-plan.md](../v1.5-plan.md) — post-launch backlog (returns, discounts, wishlists, abandoned cart)
+
+The implementation reference (Postgres schema, REST endpoint specs, local-dev,
+deployment) is the source code itself plus:
+
+- Schema → [../../apps/api/src/db/schema.ts](../../apps/api/src/db/schema.ts) and [../../apps/api/migrations/](../../apps/api/migrations/)
+- API surface → the route files under [../../apps/api/src/routes/](../../apps/api/src/routes/) and the typed [`@veronica/contracts`](../../packages/contracts/) schemas
+- Local dev → repo root [README.md](../../README.md) and [`apps/api/.env.example`](../../apps/api/.env.example)
+- Deployment → [../../Dockerfile](../../Dockerfile) and [../../fly.toml](../../fly.toml)
+
+> The earlier cross-cutting design notes (`01-data-model.md`, `02-api-design.md`,
+> `03-local-dev.md`, `04-deployment.md`) live in the frontend planning repo at
+> `veronica-web/docs/planning/`, not here.

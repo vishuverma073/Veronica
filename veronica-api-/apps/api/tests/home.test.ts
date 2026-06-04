@@ -30,7 +30,7 @@ function adminDb(): DbClient {
   return {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [adminRow] }) }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
-    insert: () => ({ values: async () => undefined }),
+    insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
   } as unknown as DbClient;
 }
 

@@ -18,6 +18,7 @@ import {
 } from "../../db/schema.js";
 import { makeRequireAdmin } from "../../middleware/auth.js";
 import { logAudit } from "../../lib/audit.js";
+import { invalidateProductCaches } from "../../lib/cache.js";
 import { slugify } from "../../lib/slug.js";
 import type { AppEnv } from "../../lib/types.js";
 
@@ -309,6 +310,7 @@ export function makeAdminProductsRouter(db: DbClient) {
       resourceId: String(newId),
       changes: { after: detail },
     });
+    if (detail) await invalidateProductCaches(detail.slug);
     return c.json(detail, 201);
   });
 
@@ -371,6 +373,9 @@ export function makeAdminProductsRouter(db: DbClient) {
       resourceId: String(id),
       changes: { before, after },
     });
+    // Slug may have changed — clear both old and new.
+    await invalidateProductCaches(before.slug);
+    if (after && after.slug !== before.slug) await invalidateProductCaches(after.slug);
     return c.json(after);
   });
 
@@ -394,6 +399,7 @@ export function makeAdminProductsRouter(db: DbClient) {
       resourceId: String(id),
       changes: { before, after: { ...before, status: "archived" } },
     });
+    await invalidateProductCaches(before.slug);
     return c.json({ success: true, id, status: "archived" });
   });
 

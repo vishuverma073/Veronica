@@ -13,9 +13,15 @@ import {
   uniqueIndex,
   pgEnum,
   check,
+  customType,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+
+/** Postgres tsvector column type (Drizzle has no built-in). */
+const tsvector = customType<{ data: string }>({
+  dataType: () => "tsvector",
+});
 
 // ─── Enums ───────────────────────────────────────────────────
 
@@ -28,6 +34,20 @@ export const orderStatusEnum = pgEnum("order_status", [
   "delivered",
   "cancelled",
   "refunded",
+]);
+
+/** Order timeline event kinds (Phase 6). Superset of order_status plus the
+ * non-status "placed", "out_for_delivery", and free-form "note". */
+export const orderEventTypeEnum = pgEnum("order_event_type", [
+  "placed",
+  "paid",
+  "confirmed",
+  "shipped",
+  "out_for_delivery",
+  "delivered",
+  "cancelled",
+  "refunded",
+  "note",
 ]);
 
 // ─── Catalog ─────────────────────────────────────────────────
@@ -43,6 +63,8 @@ export const categories = pgTable(
     description: text("description"),
     imageUrl: text("image_url"),
     sortOrder: integer("sort_order").default(0).notNull(),
+    // Admin-curated: whether this category appears in the storefront header nav.
+    showInHeader: boolean("show_in_header").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -73,12 +95,22 @@ export const products = pgTable(
     includedAccessories: text("included_accessories").array(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // Full-text search vector; auto-maintained by Postgres (generated stored).
+    // Generated tsvector for full-text search. Postgres requires the generation
+    // expression to be IMMUTABLE, but every inline to_tsvector form is only
+    // STABLE — so it delegates to the IMMUTABLE wrapper function
+    // veronica_product_search(), created in migration 0003 (Drizzle can't emit
+    // the function itself).
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`veronica_product_search(name, description, tags)`,
+    ),
   },
   (t) => [
     index("products_category_id_idx").on(t.categoryId),
     index("products_status_bestseller_idx").on(t.status, t.isBestseller),
     index("products_status_new_idx").on(t.status, t.isNew),
     index("products_category_pin_idx").on(t.categoryId, t.categoryPinOrder),
+    index("products_search_idx").using("gin", t.searchVector),
   ],
 );
 
@@ -176,6 +208,8 @@ export const addresses = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     label: text("label"),
+    fullName: text("full_name"),
+    phone: text("phone"),
     line1: text("line1").notNull(),
     line2: text("line2"),
     city: text("city").notNull(),
@@ -268,6 +302,24 @@ export const orderItems = pgTable(
   (t) => [index("order_items_order_id_idx").on(t.orderId)],
 );
 
+/** Append-only order timeline (Phase 6). Auto-logged on status transitions and
+ * extended by admins with shipping notes ("Out for delivery, AWB#…"). */
+export const orderEvents = pgTable(
+  "order_events",
+  {
+    id: serial("id").primaryKey(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    eventType: orderEventTypeEnum("event_type").notNull(),
+    note: text("note"),
+    // null for system events; the admin's user id for manual ones.
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("order_events_order_created_idx").on(t.orderId, t.createdAt)],
+);
+
 // ─── Audit ───────────────────────────────────────────────────
 
 export const auditLog = pgTable(
@@ -285,6 +337,27 @@ export const auditLog = pgTable(
     index("audit_log_resource_idx").on(t.resourceType, t.resourceId, t.createdAt.desc()),
     index("audit_log_actor_idx").on(t.actorUserId, t.createdAt.desc()),
   ],
+);
+
+/**
+ * Durable, append-only order backups. A full JSON snapshot of an order is
+ * written here every time an order is placed and again when it's paid, so the
+ * complete order is recoverable even if the live `orders` row is later mutated,
+ * corrupted or deleted. Intentionally NOT foreign-keyed to `orders` — the
+ * backup must outlive the row it copies. Writes are best-effort and never block
+ * checkout (see lib/order-backup.ts).
+ */
+export const orderBackups = pgTable(
+  "order_backups",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    orderId: uuid("order_id").notNull(),
+    orderNumber: text("order_number").notNull(),
+    reason: text("reason").notNull(), // "created" | "paid"
+    snapshot: jsonb("snapshot").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("order_backups_order_idx").on(t.orderId, t.createdAt)],
 );
 
 // ─── Admin config (singletons) ───────────────────────────────
@@ -418,9 +491,15 @@ export const cartItemsRelations = relations(cartItems, ({ one }) => ({
 export const ordersRelations = relations(orders, ({ one, many }) => ({
   user: one(users, { fields: [orders.userId], references: [users.id] }),
   items: many(orderItems),
+  events: many(orderEvents),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
   order: one(orders, { fields: [orderItems.orderId], references: [orders.id] }),
   sku: one(skus, { fields: [orderItems.skuId], references: [skus.id] }),
+}));
+
+export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
+  order: one(orders, { fields: [orderEvents.orderId], references: [orders.id] }),
+  createdByUser: one(users, { fields: [orderEvents.createdBy], references: [users.id] }),
 }));

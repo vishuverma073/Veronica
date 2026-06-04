@@ -118,6 +118,7 @@ export const AdminCategoryCreateSchema = z.object({
   description: z.string().default(""),
   image: UrlSchema.optional(),
   sortOrder: z.number().int().default(0),
+  showInHeader: z.boolean().default(false),
 });
 export type AdminCategoryCreate = z.infer<typeof AdminCategoryCreateSchema>;
 

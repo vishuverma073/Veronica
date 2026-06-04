@@ -10,6 +10,7 @@ import type { DbClient } from "../../db/client.js";
 import { categories, products } from "../../db/schema.js";
 import { makeRequireAdmin } from "../../middleware/auth.js";
 import { logAudit } from "../../lib/audit.js";
+import { invalidateCategoryCaches } from "../../lib/cache.js";
 import { slugify } from "../../lib/slug.js";
 import type { AppEnv } from "../../lib/types.js";
 
@@ -24,6 +25,7 @@ function mapCategory(row: CategoryRow) {
     description: row.description ?? "",
     image: row.imageUrl ?? undefined,
     sortOrder: row.sortOrder,
+    showInHeader: row.showInHeader,
   });
 }
 
@@ -111,6 +113,7 @@ export function makeAdminCategoriesRouter(db: DbClient) {
         description: body.description,
         imageUrl: body.image ?? null,
         sortOrder: body.sortOrder,
+        showInHeader: body.showInHeader,
       })
       .returning();
     const category = mapCategory(row!);
@@ -122,6 +125,7 @@ export function makeAdminCategoriesRouter(db: DbClient) {
       resourceId: String(category.id),
       changes: { after: category },
     });
+    await invalidateCategoryCaches();
     return c.json(category, 201);
   });
 
@@ -158,6 +162,7 @@ export function makeAdminCategoriesRouter(db: DbClient) {
     if (body.description !== undefined) update.description = body.description;
     if (body.image !== undefined) update.imageUrl = body.image;
     if (body.sortOrder !== undefined) update.sortOrder = body.sortOrder;
+    if (body.showInHeader !== undefined) update.showInHeader = body.showInHeader;
 
     const [row] = await db.update(categories).set(update).where(eq(categories.id, id)).returning();
     const after = mapCategory(row!);
@@ -169,6 +174,7 @@ export function makeAdminCategoriesRouter(db: DbClient) {
       resourceId: String(id),
       changes: { before: mapCategory(existing), after },
     });
+    await invalidateCategoryCaches();
     return c.json(after);
   });
 
@@ -192,13 +198,15 @@ export function makeAdminCategoriesRouter(db: DbClient) {
     const productCount = Number(productRows[0]?.n ?? 0);
 
     if (childCount > 0 || productCount > 0) {
+      // 409 Conflict (not 400): the request is well-formed but blocked by
+      // dependencies. The admin UI keys off 409 to show a helpful message.
       return c.json(
         {
           error: "Category cannot be deleted while it has subcategories or products",
           childCount: Number(childCount),
           productCount: Number(productCount),
         },
-        400,
+        409,
       );
     }
 
@@ -210,6 +218,7 @@ export function makeAdminCategoriesRouter(db: DbClient) {
       resourceId: String(id),
       changes: { before: mapCategory(existing) },
     });
+    await invalidateCategoryCaches();
     return c.json({ success: true, id });
   });
 

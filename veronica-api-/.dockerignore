@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+.git
+**/.env
+.npmrc
+*.log
+.turbo
+.wrangler
+.pnpm-store
+**/.DS_Store

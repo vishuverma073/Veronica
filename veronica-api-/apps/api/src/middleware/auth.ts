@@ -2,7 +2,7 @@ import { createMiddleware } from "hono/factory";
 import { eq } from "drizzle-orm";
 import type { DbClient } from "../db/client.js";
 import { users } from "../db/schema.js";
-import { verifyAdminAccess } from "../lib/jwt.js";
+import { verifyAccess, verifyAdminAccess } from "../lib/jwt.js";
 import type { AdminUserRecord, AppEnv } from "../lib/types.js";
 
 /**
@@ -73,3 +73,22 @@ export function makeRequireAdmin(db: DbClient) {
     await next();
   });
 }
+
+/**
+ * Gate a route by a valid customer access JWT (Phase 3). Sets `userId` and
+ * `isAdmin` on the context. Distinct from makeRequireAdmin, which uses the
+ * separate admin-panel JWT.
+ */
+export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const header = c.req.header("Authorization");
+  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+  if (!token) return c.json({ error: "Unauthorized" }, 401);
+  try {
+    const { sub, isAdmin } = await verifyAccess(token);
+    c.set("userId", sub);
+    c.set("isAdmin", isAdmin);
+  } catch {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  await next();
+});

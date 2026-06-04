@@ -1,0 +1,29 @@
+# Fly.io staging config for the Veronica API (Mumbai region).
+# Deploy from the repo root. App name must be globally unique — `fly launch`
+# will prompt to rename if "veronica-api-staging" is taken.
+app = "veronica-api-staging"
+primary_region = "bom"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # Scale to zero when idle (cheap staging; ~1s cold start). Set
+  # min_machines_running = 1 to eliminate cold starts.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  method = "GET"
+  path = "/healthz"
+  interval = "15s"
+  timeout = "2s"
+  grace_period = "10s"

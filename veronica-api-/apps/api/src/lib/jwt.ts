@@ -36,3 +36,56 @@ export async function verifyAdminAccess(token: string): Promise<AdminTokenPayloa
   }
   return { sub: payload.sub };
 }
+
+// ─── Customer auth (Phase 3) — separate secrets + issuer from admin ──────────
+
+const ACCESS_TTL_SECONDS = 15 * 60; // 15 min
+const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+
+function accessSecret(): string {
+  const s = process.env.JWT_ACCESS_SECRET;
+  if (!s || s.length < 32) throw new Error("JWT_ACCESS_SECRET is missing or shorter than 32 chars");
+  return s;
+}
+function refreshSecret(): string {
+  const s = process.env.JWT_REFRESH_SECRET;
+  if (!s || s.length < 32) throw new Error("JWT_REFRESH_SECRET is missing or shorter than 32 chars");
+  return s;
+}
+function customerIssuer(): string {
+  return process.env.JWT_ISSUER ?? "veronica-api";
+}
+
+export async function signAccess(payload: { sub: string; isAdmin: boolean }): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return sign(
+    { sub: payload.sub, isAdmin: payload.isAdmin, iss: customerIssuer(), iat: now, exp: now + ACCESS_TTL_SECONDS },
+    accessSecret(),
+    "HS256",
+  );
+}
+
+export async function signRefresh(payload: { sub: string; jti: string }): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return sign(
+    { sub: payload.sub, jti: payload.jti, iss: customerIssuer(), iat: now, exp: now + REFRESH_TTL_SECONDS },
+    refreshSecret(),
+    "HS256",
+  );
+}
+
+export async function verifyAccess(token: string): Promise<{ sub: string; isAdmin: boolean }> {
+  const p = await verify(token, accessSecret(), "HS256");
+  if (p.iss !== customerIssuer()) throw new Error("invalid token issuer");
+  if (typeof p.sub !== "string") throw new Error("invalid token subject");
+  return { sub: p.sub, isAdmin: p.isAdmin === true };
+}
+
+export async function verifyRefresh(token: string): Promise<{ sub: string; jti: string }> {
+  const p = await verify(token, refreshSecret(), "HS256");
+  if (p.iss !== customerIssuer()) throw new Error("invalid token issuer");
+  if (typeof p.sub !== "string" || typeof p.jti !== "string") throw new Error("invalid refresh token");
+  return { sub: p.sub, jti: p.jti };
+}
+
+export const REFRESH_TTL = REFRESH_TTL_SECONDS;
