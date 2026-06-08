@@ -19,8 +19,14 @@ export const UrlSchema = z
   });
 export type Url = z.infer<typeof UrlSchema>;
 
-/** Monetary amount; non-negative. */
-export const PriceSchema = z.number().nonnegative();
+/** Matches Postgres `numeric(10, 2)` — max ₹99,999,999.99. */
+export const MAX_PRICE_RUPEES = 99_999_999.99;
+
+/** Monetary amount; non-negative, within DB numeric(10,2) range. */
+export const PriceSchema = z
+  .number()
+  .nonnegative()
+  .max(MAX_PRICE_RUPEES, `must be at most ₹${MAX_PRICE_RUPEES.toLocaleString("en-IN")}`);
 export type Price = z.infer<typeof PriceSchema>;
 
 /** ISO-8601 datetime string. */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { cartesian, comboKey, syncSkus } from "./sku-matrix";
-import type { VariantDimension, ProductSKU } from "@veronica/contracts";
+import type { VariantDimension } from "@veronica/contracts";
+import { cartesian, comboKey, syncSkus, type EditableSku } from "./sku-matrix";
 
 function dim(id: number, name: string, values: string[]): VariantDimension {
   return {
@@ -44,7 +44,7 @@ describe("syncSkus", () => {
   });
 
   it("preserves the existing price when collapsing to no variants", () => {
-    const existing: ProductSKU[] = [
+    const existing: EditableSku[] = [
       { id: 5, skuCode: "OLD", price: 999, salePrice: 799, dimensionValues: {} },
     ];
     const skus = syncSkus([], existing, "ABC");
@@ -70,7 +70,7 @@ describe("syncSkus", () => {
     const kept = second.find((s) => s.dimensionValues.Size === "S");
     const added = second.find((s) => s.dimensionValues.Size === "L");
     expect(kept?.price).toBe(1500);
-    expect(added?.price).toBe(0);
+    expect(added?.price).toBe(null);
     expect(second).toHaveLength(2);
   });
 

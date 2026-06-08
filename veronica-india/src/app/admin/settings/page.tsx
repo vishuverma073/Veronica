@@ -9,9 +9,10 @@ import { SettingsSchema, type Settings } from "@veronica/contracts";
 import { useSettings } from "@/lib/admin-hooks";
 import { adminApi } from "@/lib/admin-api";
 import { useSWRConfig } from "swr";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 
 export default function SettingsPage() {
-  const { data, isLoading } = useSettings();
+  const { data, isLoading, error } = useSettings();
   const { mutate } = useSWRConfig();
 
   const {
@@ -26,6 +27,8 @@ export default function SettingsPage() {
   useEffect(() => {
     if (data) reset(data);
   }, [data, reset]);
+
+  useUnsavedChangesGuard(isDirty);
 
   async function onSubmit(values: Settings) {
     try {
@@ -44,6 +47,17 @@ export default function SettingsPage() {
     return (
       <div className="flex items-center justify-center py-20 text-text-muted">
         <Loader2 className="animate-spin" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="max-w-xl py-20 text-center">
+        <p className="text-sm text-danger mb-3">Couldn’t load settings.</p>
+        <button type="button" onClick={() => void mutate(["admin/settings"])} className="btn btn-secondary text-sm">
+          Retry
+        </button>
       </div>
     );
   }

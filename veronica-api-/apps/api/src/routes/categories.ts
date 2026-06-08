@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import {
   CategoryListSchema,
   CategoryWithBreadcrumbSchema,
@@ -9,6 +9,7 @@ import type { DbClient } from "../db/client.js";
 import { categories } from "../db/schema.js";
 import type { AppEnv } from "../lib/types.js";
 import { cached } from "../lib/cache.js";
+import { normalizeImageUrl } from "../lib/normalize-image.js";
 
 const CATEGORY_TTL = 600; // 10 min
 
@@ -21,9 +22,10 @@ function mapCategory(row: CategoryRow): Category {
     name: row.name,
     slug: row.slug,
     description: row.description ?? "",
-    image: row.imageUrl ?? undefined,
+    image: normalizeImageUrl(row.imageUrl) ?? undefined,
     sortOrder: row.sortOrder,
     showInHeader: row.showInHeader,
+    status: row.status,
   };
 }
 
@@ -46,7 +48,7 @@ async function buildCategoryDetail(db: DbClient, category: CategoryRow) {
   const children = await db
     .select()
     .from(categories)
-    .where(eq(categories.parentId, category.id))
+    .where(and(eq(categories.parentId, category.id), eq(categories.status, "active")))
     .orderBy(asc(categories.sortOrder));
 
   return CategoryWithBreadcrumbSchema.parse({
@@ -65,7 +67,21 @@ export function makeCategoriesRouter(db: DbClient) {
       const rows = await db
         .select()
         .from(categories)
-        .where(isNull(categories.parentId))
+        .where(and(isNull(categories.parentId), eq(categories.status, "active")))
+        .orderBy(asc(categories.sortOrder));
+      return CategoryListSchema.parse(rows.map(mapCategory));
+    });
+    c.header("x-cache", hit ? "HIT" : "MISS");
+    return c.json(value);
+  });
+
+  // GET /categories/all — flat list of every active category (for nav trees, sitemap).
+  router.get("/all", async (c) => {
+    const { value, hit } = await cached("categories:all", CATEGORY_TTL, async () => {
+      const rows = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.status, "active"))
         .orderBy(asc(categories.sortOrder));
       return CategoryListSchema.parse(rows.map(mapCategory));
     });
@@ -81,7 +97,7 @@ export function makeCategoriesRouter(db: DbClient) {
     if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
     const { value, hit } = await cached(`category:id:${id}`, CATEGORY_TTL, async () => {
       const [category] = await db.select().from(categories).where(eq(categories.id, id)).limit(1);
-      if (!category) return null;
+      if (!category || category.status === "archived") return null;
       return buildCategoryDetail(db, category);
     });
 
@@ -95,7 +111,7 @@ export function makeCategoriesRouter(db: DbClient) {
     const slug = c.req.param("slug");
     const { value, hit } = await cached(`category:${slug}`, CATEGORY_TTL, async () => {
       const [category] = await db.select().from(categories).where(eq(categories.slug, slug)).limit(1);
-      if (!category) return null;
+      if (!category || category.status === "archived") return null;
       return buildCategoryDetail(db, category);
     });
 

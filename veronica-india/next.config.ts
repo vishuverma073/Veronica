@@ -1,5 +1,19 @@
 import type { NextConfig } from "next";
 
+const apiProxyTarget = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8787";
+
+function apiConnectSrc(): string {
+  if (process.env.NEXT_PUBLIC_USE_API_PROXY === "true") {
+    return "'self'";
+  }
+  const raw = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
+  try {
+    return `'self' ${new URL(raw).origin}`;
+  } catch {
+    return "'self' http://localhost:8787";
+  }
+}
+
 const nextConfig: NextConfig = {
   images: {
     formats: ["image/avif", "image/webp"],
@@ -25,6 +39,18 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  /** Proxy API through Next on the same origin — best for phone/LAN testing (no CORS). */
+  async rewrites() {
+    const useProxy = process.env.NEXT_PUBLIC_USE_API_PROXY === "true";
+    if (!useProxy) return [];
+    const target = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8787";
+    return [
+      {
+        source: "/veronica-api/:path*",
+        destination: `${target}/:path*`,
+      },
+    ];
+  },
   async headers() {
     // Permissive but meaningful: blocks clickjacking + MIME-sniffing, and a CSP
     // that still allows Next.js' inline runtime, Razorpay checkout, the UPI QR
@@ -39,8 +65,8 @@ const nextConfig: NextConfig = {
       "font-src 'self' data: https:",
       "style-src 'self' 'unsafe-inline'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://*.razorpay.com",
-      "connect-src 'self' https: http://localhost:8787",
-      "frame-src 'self' https://api.razorpay.com https://*.razorpay.com",
+      "connect-src 'self' https: ws: wss: " + apiConnectSrc(),
+      "frame-src 'self' https://www.google.com https://maps.google.com https://api.razorpay.com https://*.razorpay.com",
     ].join("; ");
 
     const headers = [

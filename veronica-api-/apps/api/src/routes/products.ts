@@ -9,17 +9,19 @@ import {
   type ProductStructuredData,
 } from "@veronica/contracts";
 import type { DbClient } from "../db/client.js";
-import { products } from "../db/schema.js";
+import { products, categories } from "../db/schema.js";
 import type { AppEnv } from "../lib/types.js";
 import { cached } from "../lib/cache.js";
+import { extractProductSizes } from "../lib/product-sizes.js";
 
 const PRODUCT_TTL = 300; // 5 min
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 
-type SkuPrice = { price: string; salePrice: string | null };
+type SkuPrice = { price: string; salePrice: string | null; dimensionValues?: Record<string, string> | null };
 type ImageRef = { url: string; sortOrder: number };
+type DimRef = { name: string; values: { value: string; sortOrder: number }[] };
 
 /** Compute the light list-item shape (price range + best discount + primary image). */
 export function toListItem(
@@ -35,6 +37,7 @@ export function toListItem(
   },
   skus: SkuPrice[],
   images: ImageRef[],
+  dimensions: DimRef[] = [],
 ): ProductListItem {
   const effective = skus.map((s) => (s.salePrice !== null ? Number(s.salePrice) : Number(s.price)));
   const bases = skus.map((s) => Number(s.price));
@@ -59,6 +62,7 @@ export function toListItem(
     minPrice: effective.length ? Math.min(...effective) : 0,
     maxBasePrice: bases.length ? Math.max(...bases) : 0,
     bestDiscount,
+    sizes: extractProductSizes(skus, dimensions),
   };
 }
 
@@ -125,14 +129,18 @@ export function makeProductsRouter(db: DbClient) {
       orderBy: (p, { asc }) => [asc(p.id)],
       limit: q.limit + 1,
       with: {
-        skus: { columns: { price: true, salePrice: true } },
+        skus: { columns: { price: true, salePrice: true, dimensionValues: true } },
         images: { columns: { url: true, sortOrder: true } },
+        dimensions: {
+          columns: { name: true, sortOrder: true },
+          with: { values: { columns: { value: true, sortOrder: true } } },
+        },
       },
     });
 
     const hasMore = rows.length > q.limit;
     const page = rows.slice(0, q.limit);
-    const items = page.map((p) => toListItem(p, p.skus, p.images));
+    const items = page.map((p) => toListItem(p, p.skus, p.images, p.dimensions));
     const nextCursor = hasMore && page.length ? page[page.length - 1]!.id : null;
 
     return c.json(
@@ -146,33 +154,69 @@ export function makeProductsRouter(db: DbClient) {
   // (Defined before /:slug; an unknown slug yields an empty list.)
   router.get("/by-category/:slug", async (c) => {
     const slug = c.req.param("slug");
-    const { value, hit } = await cached(`category-products:${slug}`, PRODUCT_TTL, async () => {
-      const treeRows = await db.execute<{ id: number }>(sql`
-        WITH RECURSIVE category_tree AS (
-          SELECT id FROM categories WHERE slug = ${slug}
-          UNION ALL
-          SELECT c.id FROM categories c JOIN category_tree ct ON c.parent_id = ct.id
-        )
-        SELECT id FROM category_tree
-      `);
-      const ids = (treeRows as unknown as { id: number }[]).map((r) => Number(r.id));
-      if (ids.length === 0) return { items: [], nextCursor: null as number | null };
+    const q = ListQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
 
-      const rows = await db.query.products.findMany({
-        where: and(eq(products.status, "active"), inArray(products.categoryId, ids)),
-        orderBy: (p, { asc }) => [asc(p.id)],
-        with: {
-          skus: { columns: { price: true, salePrice: true } },
-          images: { columns: { url: true, sortOrder: true } },
+    const [root] = await db
+      .select({ id: categories.id, status: categories.status })
+      .from(categories)
+      .where(eq(categories.slug, slug))
+      .limit(1);
+    if (!root || root.status === "archived") {
+      return c.json({ items: [], nextCursor: null, total: 0 });
+    }
+
+    const treeRows = await db.execute<{ id: number }>(sql`
+      WITH RECURSIVE category_tree AS (
+        SELECT id FROM categories WHERE slug = ${slug}
+        UNION ALL
+        SELECT c.id FROM categories c JOIN category_tree ct ON c.parent_id = ct.id
+      )
+      SELECT id FROM category_tree
+    `);
+    const ids = (treeRows as unknown as { id: number }[]).map((r) => Number(r.id));
+    if (ids.length === 0) return c.json({ items: [], nextCursor: null, total: 0 });
+
+    const baseWhere = and(eq(products.status, "active"), inArray(products.categoryId, ids));
+    const where =
+      q.cursor !== undefined ? and(baseWhere, gt(products.id, q.cursor)) : baseWhere;
+
+    const rows = await db.query.products.findMany({
+      where,
+      orderBy: (p, { asc }) => [asc(p.id)],
+      limit: q.limit + 1,
+      with: {
+        skus: { columns: { price: true, salePrice: true, dimensionValues: true } },
+        images: { columns: { url: true, sortOrder: true } },
+        dimensions: {
+          columns: { name: true, sortOrder: true },
+          with: { values: { columns: { value: true, sortOrder: true } } },
         },
-      });
-      const items = rows.map((p) => toListItem(p, p.skus, p.images));
-      return z
-        .object({ items: z.array(ProductListItemSchema), nextCursor: z.number().nullable() })
-        .parse({ items, nextCursor: null });
+      },
     });
-    c.header("x-cache", hit ? "HIT" : "MISS");
-    return c.json(value);
+
+    const hasMore = rows.length > q.limit;
+    const page = rows.slice(0, q.limit);
+    const items = page.map((p) => toListItem(p, p.skus, p.images, p.dimensions));
+    const nextCursor = hasMore && page.length ? page[page.length - 1]!.id : null;
+
+    let total: number | undefined;
+    if (q.cursor === undefined) {
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(products)
+        .where(baseWhere);
+      total = Number(countRow?.count ?? 0);
+    }
+
+    return c.json(
+      z
+        .object({
+          items: z.array(ProductListItemSchema),
+          nextCursor: z.number().nullable(),
+          total: z.number().int().nonnegative().optional(),
+        })
+        .parse({ items, nextCursor, total }),
+    );
   });
 
   // GET /products/:slug — full active product detail.

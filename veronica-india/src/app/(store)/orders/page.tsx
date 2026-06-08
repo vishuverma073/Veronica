@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { Loader2, Package, ChevronRight } from "lucide-react";
 import { backend } from "@/lib/backend";
 import { useAuthStore } from "@/store/authStore";
-import { formatPrice } from "@/lib/utils";
+import { formatPrice, getSafeImageSrc } from "@/lib/utils";
 import { statusBadgeClass, statusLabel } from "@/lib/order-status";
+import ApiErrorState from "@/components/store/ApiErrorState";
 import type { OrderListItem } from "@veronica/contracts";
 
 export default function OrdersPage() {
@@ -18,10 +19,24 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderListItem[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") router.replace("/login?returnTo=/orders");
   }, [status, router]);
+
+  const loadOrders = useCallback(async () => {
+    setFetchError(false);
+    try {
+      const page = await backend.getOrders();
+      setOrders(page.items);
+      setCursor(page.nextCursor);
+    } catch {
+      setFetchError(true);
+      setOrders([]);
+      setCursor(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -32,9 +47,17 @@ export default function OrdersPage() {
         if (!active) return;
         setOrders(page.items);
         setCursor(page.nextCursor);
+        setFetchError(false);
       })
-      .catch(() => active && setOrders([]));
-    return () => { active = false; };
+      .catch(() => {
+        if (active) {
+          setFetchError(true);
+          setOrders([]);
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, [status]);
 
   async function loadMore() {
@@ -44,6 +67,8 @@ export default function OrdersPage() {
       const page = await backend.getOrders(cursor);
       setOrders((prev) => [...(prev ?? []), ...page.items]);
       setCursor(page.nextCursor);
+    } catch {
+      setFetchError(true);
     } finally {
       setLoadingMore(false);
     }
@@ -57,6 +82,18 @@ export default function OrdersPage() {
     );
   }
 
+  if (fetchError) {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16">
+        <ApiErrorState
+          title="Couldn't load your orders"
+          message="We couldn't fetch your order history. Your orders are still safe — please try again."
+          onRetry={loadOrders}
+        />
+      </div>
+    );
+  }
+
   if (orders.length === 0) {
     return (
       <div className="max-w-lg mx-auto px-4 py-20 text-center">
@@ -65,7 +102,9 @@ export default function OrdersPage() {
         </div>
         <h1 className="text-xl font-bold text-brand-black mb-2">No orders yet</h1>
         <p className="text-sm text-text-muted mb-6">Your orders will appear here once you’ve placed one.</p>
-        <Link href="/" className="btn btn-primary">Start shopping</Link>
+        <Link href="/" className="btn btn-primary">
+          Start shopping
+        </Link>
       </div>
     );
   }
@@ -82,9 +121,12 @@ export default function OrdersPage() {
             className="flex items-center gap-3 p-4 bg-white rounded-2xl border border-border-light shadow-card hover:border-border transition-colors"
           >
             <div className="w-14 h-14 bg-surface-dim rounded-xl overflow-hidden shrink-0 border border-border-light">
-              {o.firstItemImage && (
-                <Image src={o.firstItemImage} alt="" width={56} height={56} className="object-contain w-full h-full p-1.5" />
-              )}
+              {(() => {
+                const thumb = getSafeImageSrc(o.firstItemImage);
+                return thumb ? (
+                  <Image src={thumb} alt="" width={56} height={56} className="object-contain w-full h-full p-1.5" />
+                ) : null;
+              })()}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
@@ -95,7 +137,8 @@ export default function OrdersPage() {
               </div>
               <p className="text-xs text-text-muted mt-1">
                 {new Date(o.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                {" · "}{o.itemCount} item{o.itemCount !== 1 ? "s" : ""}
+                {" · "}
+                {o.itemCount} item{o.itemCount !== 1 ? "s" : ""}
               </p>
             </div>
             <div className="text-right shrink-0">

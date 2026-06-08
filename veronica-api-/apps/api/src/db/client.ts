@@ -15,6 +15,12 @@ export type DbClient = PostgresJsDatabase<typeof schema>;
  * Node-specific APIs so that swap stays clean.
  */
 export function createDbClient(url: string): DbClient {
-  const sql = postgres(url, { prepare: false });
+  const sql = postgres(url, {
+    prepare: false,
+    // Supabase pooler limits concurrent connections — keep the dev pool small.
+    max: 10,
+    idle_timeout: 20,
+    connect_timeout: 10,
+  });
   return drizzle(sql, { schema });
 }

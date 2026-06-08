@@ -9,7 +9,6 @@ import { backend } from "@/lib/backend";
 import Sidebar from "./Sidebar";
 import BottomNav from "./BottomNav";
 import TopBar from "./TopBar";
-import WelcomeSplash from "./WelcomeSplash";
 
 /**
  * Authenticated admin chrome: desktop sidebar + mobile bottom nav + top bar.
@@ -40,19 +39,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
   // Hold the first paint until we know whether a session exists.
   if (!hydrated || !token) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-surface-dim">
-        <div className="text-text-secondary text-sm">Loading…</div>
-      </div>
-    );
+    return <div className="min-h-screen bg-brand-black" aria-hidden />;
   }
 
   return (
     <div className="min-h-screen bg-surface-dim">
-      <WelcomeSplash />
       <Sidebar onLogout={handleLogout} />
       <div className="lg:pl-60 flex flex-col min-h-screen">
-        <TopBar />
+        <TopBar onLogout={handleLogout} />
         <main className="flex-1 p-4 lg:p-6 pb-24 lg:pb-6 overflow-x-hidden">{children}</main>
       </div>
       <BottomNav />

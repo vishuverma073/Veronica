@@ -61,6 +61,33 @@ export function generateWhatsAppUrl(
 /**
  * cn - merge classnames (simple)
  */
+/** True when `url` is a non-empty, usable image src for img/Image. */
+export function hasValidImage(url: string | null | undefined): boolean {
+  return getSafeImageSrc(url) !== null;
+}
+
+/**
+ * Returns a trimmed image URL safe for img/Image `src`, or null when missing/invalid.
+ * Rejects empty strings and whitespace-only values.
+ */
+export function getSafeImageSrc(url: string | null | undefined): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/")) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return null;
+}
+
+/** @deprecated Use getSafeImageSrc — kept for existing product thumbnail call sites. */
+export function productImageUrl(url: string | null | undefined): string | null {
+  return getSafeImageSrc(url);
+}
+
+/** Normalize optional image input for API payloads: empty/invalid → null. */
+export function normalizeImageInput(url: string | null | undefined): string | null {
+  return getSafeImageSrc(url);
+}
+
 export function cn(...classes: (string | undefined | false)[]): string {
     return classes.filter(Boolean).join(" ");
 }

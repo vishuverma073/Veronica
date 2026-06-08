@@ -3,7 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
-import { formatPrice } from "@/lib/utils";
+import { formatPrice, productImageUrl } from "@/lib/utils";
+import { useStoreSettings } from "@/lib/use-store-settings";
 import AddToCartButton from "@/components/store/AddToCartButton";
 import ProductCarousel from "@/components/store/ProductCarousel";
 import SectionHeader from "@/components/store/SectionHeader";
@@ -16,12 +17,14 @@ interface ProductPageClientProps {
     categoryName?: string;
     categorySlug?: string;
     breadcrumbItems: { label: string; href?: string }[];
+    shopHref?: string;
     relatedProducts: ProductListItem[];
 }
 
 export default function ProductPageClient({
     product,
     breadcrumbItems,
+    shopHref,
     relatedProducts,
 }: ProductPageClientProps) {
     // ─── Image Gallery ─────────────────────────────────
@@ -29,10 +32,18 @@ export default function ProductPageClient({
     // without uploads): next/image throws on an undefined `src`, so fall back
     // to a placeholder rather than crashing the whole PDP.
     const PLACEHOLDER_IMG = "https://placehold.co/600x600/F5F5F4/A8A29E/png?text=No+Image";
-    const galleryImages = product.images.length > 0 ? product.images : [PLACEHOLDER_IMG];
+    const galleryImages = useMemo(() => {
+        const urls = product.images
+            .map((img) => productImageUrl(img))
+            .filter((url): url is string => url != null);
+        return urls.length > 0 ? urls : [PLACEHOLDER_IMG];
+    }, [product.images]);
     const [activeImg, setActiveImg] = useState(0);
     const scrollRef = useRef<HTMLDivElement>(null);
     const totalImages = galleryImages.length;
+
+    const { data: storeSettings } = useStoreSettings();
+    const freeDeliveryAbove = storeSettings?.shippingFreeAbove ?? 5000;
 
     const goToImage = useCallback((idx: number) => {
         const clamped = Math.max(0, Math.min(idx, totalImages - 1));
@@ -109,6 +120,12 @@ export default function ProductPageClient({
             <div className="max-w-380 mx-auto px-4 pt-4 pb-2">
                 <nav className="flex items-center gap-1.5 text-[12px] text-text-muted" aria-label="Breadcrumb">
                     <Link href="/" className="hover:text-text-primary transition-colors"><Home size={13} /></Link>
+                    {shopHref && (
+                        <span className="flex items-center gap-1.5">
+                            <ChevronRight size={10} className="opacity-40" />
+                            <Link href={shopHref} className="hover:text-text-primary transition-colors">Shop</Link>
+                        </span>
+                    )}
                     {breadcrumbItems.map((item, i) => (
                         <span key={i} className="flex items-center gap-1.5">
                             <ChevronRight size={10} className="opacity-40" />
@@ -313,8 +330,9 @@ export default function ProductPageClient({
                                         : ""),
                                     slug: product.slug,
                                     price: displayPrice,
-                                    image: galleryImages[0],
+                                    image: galleryImages[0] ?? PLACEHOLDER_IMG,
                                     variant: Object.values(selections).join(" / ") || undefined,
+                                    stock: currentSKU?.stock,
                                 }}
                             />
                         </div>
@@ -385,7 +403,13 @@ export default function ProductPageClient({
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <div className="flex items-center gap-2.5">
                                     <Truck size={16} className="text-text-muted shrink-0" strokeWidth={1.5} />
-                                    <span className="text-[12px] text-text-secondary leading-tight">Free delivery<br /><span className="text-text-muted">Orders ₹5,000+</span></span>
+                                    <span className="text-[12px] text-text-secondary leading-tight">
+                                        Free delivery
+                                        <br />
+                                        <span className="text-text-muted">
+                                            Orders {formatPrice(freeDeliveryAbove)}+
+                                        </span>
+                                    </span>
                                 </div>
                                 <div className="flex items-center gap-2.5">
                                     <Package size={16} className="text-text-muted shrink-0" strokeWidth={1.5} />

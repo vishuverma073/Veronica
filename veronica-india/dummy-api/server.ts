@@ -8,8 +8,9 @@
  * frontend can run with NEXT_PUBLIC_USE_MOCKS=false against an external API,
  * exactly as it will against the production backend.
  *
- * Run:  npm run dummy-api   (listens on http://localhost:8787)
- * Then: set the FE's NEXT_PUBLIC_USE_MOCKS=false + NEXT_PUBLIC_API_URL=http://localhost:8787
+ * Run:  npm run dummy-api   (listens on 0.0.0.0:8787 by default)
+ * Then: NEXT_PUBLIC_USE_MOCKS=false + NEXT_PUBLIC_USE_API_PROXY=true (recommended)
+ *    or NEXT_PUBLIC_API_URL=http://<your-lan-ip>:8787
  *
  * State is in-memory and lives in THIS process, so — unlike the mocks — it
  * survives frontend reloads (cart/orders/addresses persist until you restart
@@ -18,6 +19,7 @@
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { networkInterfaces } from "node:os";
 import { createMiddleware } from "@mswjs/http-middleware";
 import { handlers } from "@/mocks/handlers";
 import {
@@ -29,7 +31,11 @@ import {
 } from "@/mocks/data/account";
 
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.HOST ?? "0.0.0.0";
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+
+const DEV_LAN_ORIGIN =
+  /^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
 const REFRESH_COOKIE = "veronica_refresh";
 
 /** refreshToken -> phone. The httpOnly cookie carries the opaque refresh token. */
@@ -40,9 +46,20 @@ function newRefreshToken() {
 
 const app = express();
 
-// Real CORS with credentials so the browser stores/sends the refresh cookie
-// (localhost:3000 ↔ localhost:8787 is same-site, so SameSite=Lax is sent).
-app.use(cors({ origin: WEB_ORIGIN, credentials: true }));
+// Real CORS with credentials (localhost or LAN dev origins).
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (origin === WEB_ORIGIN) return callback(null, true);
+      if (process.env.NODE_ENV !== "production" && DEV_LAN_ORIGIN.test(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error(`CORS blocked: ${origin}`));
+    },
+    credentials: true,
+  }),
+);
 app.use(cookieParser());
 
 app.get("/health", (_req, res) => res.json({ ok: true, backend: "dummy" }));
@@ -91,8 +108,17 @@ app.post("/auth/logout", (req, res) => {
 // ── Everything else: the reused MSW handlers, served over real HTTP ──────────
 app.use(createMiddleware(...handlers));
 
-app.listen(PORT, () => {
-  console.log(`\n  Veronica dummy backend → http://localhost:${PORT}`);
-  console.log(`  CORS origin: ${WEB_ORIGIN}`);
+app.listen(PORT, HOST, () => {
+  console.log(`\n  Veronica dummy backend → http://${HOST}:${PORT}`);
+  if (HOST === "0.0.0.0") {
+    for (const ifaces of Object.values(networkInterfaces())) {
+      for (const net of ifaces ?? []) {
+        if (net.family === "IPv4" && !net.internal) {
+          console.log(`  → LAN: http://${net.address}:${PORT}`);
+        }
+      }
+    }
+  }
+  console.log(`  CORS origin: ${WEB_ORIGIN} (+ private LAN IPs in dev)`);
   console.log(`  OTP code: ${MOCK_OTP}  ·  admin: admin@test.local / admin123\n`);
 });

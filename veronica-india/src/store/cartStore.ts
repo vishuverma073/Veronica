@@ -3,6 +3,8 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type { Cart, ServerCartItem } from "@veronica/contracts";
 import { backend } from "@/lib/backend";
 import { useAuthStore } from "@/store/authStore";
+import { isPurchasable, maxPurchasableQty } from "@/lib/stock";
+import { toast } from "sonner";
 
 export interface CartItem {
     id: number;          // SKU id (the merge key with the server)
@@ -14,6 +16,8 @@ export interface CartItem {
     image: string;
     variant?: string;
     qty: number;
+    /** null/undefined = stock not tracked */
+    stock?: number | null;
 }
 
 interface CartState {
@@ -24,6 +28,8 @@ interface CartState {
     removeItem: (cartKey: string) => void;
     updateQty: (cartKey: string, qty: number) => void;
     clearCart: () => void;
+    /** Empty the cart everywhere (local + the signed-in user's server cart). */
+    emptyCart: () => void;
     /** Merge the guest cart into the server cart on login, then mirror the server. */
     syncWithServer: () => Promise<void>;
 
@@ -62,13 +68,23 @@ export const useCartStore = create<CartState>()(
                 items: [],
 
                 addItem: (item) => {
+                    if (!isPurchasable(item.stock)) {
+                        toast.error("This item is out of stock");
+                        return;
+                    }
                     const cartKey = makeCartKey(item.id, item.variant);
+                    const max = maxPurchasableQty(item.stock);
                     set((state) => {
                         const existing = state.items.find((i) => i.cartKey === cartKey);
                         if (existing) {
+                            const nextQty = existing.qty + 1;
+                            if (max != null && nextQty > max) {
+                                toast.error(`Only ${max} available in stock`);
+                                return state;
+                            }
                             return {
                                 items: state.items.map((i) =>
-                                    i.cartKey === cartKey ? { ...i, qty: i.qty + 1 } : i,
+                                    i.cartKey === cartKey ? { ...i, qty: nextQty, stock: item.stock ?? i.stock } : i,
                                 ),
                             };
                         }
@@ -100,6 +116,12 @@ export const useCartStore = create<CartState>()(
 
                 updateQty: (cartKey, qty) => {
                     const target = get().items.find((i) => i.cartKey === cartKey);
+                    const max = maxPurchasableQty(target?.stock);
+                    if (qty > 0 && max != null && qty > max) {
+                        toast.error(`Only ${max} available in stock`);
+                        qty = max;
+                        if (qty <= 0) return;
+                    }
                     set((state) => {
                         if (qty <= 0) {
                             return { items: state.items.filter((i) => i.cartKey !== cartKey) };
@@ -126,6 +148,18 @@ export const useCartStore = create<CartState>()(
                 },
 
                 clearCart: () => set({ items: [] }),
+
+                emptyCart: () => {
+                    const current = get().items;
+                    set({ items: [] });
+                    // Best-effort: also clear the signed-in user's server cart so it
+                    // doesn't repopulate on the next sync.
+                    if (isAuthed()) {
+                        for (const i of current) {
+                            if (i.serverId) backend.removeCartItem(i.serverId).catch(() => {});
+                        }
+                    }
+                },
 
                 syncWithServer: async () => {
                     if (!isAuthed()) return;

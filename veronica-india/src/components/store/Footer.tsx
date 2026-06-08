@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Mail, Phone, MapPin } from "lucide-react";
 import { backend } from "@/lib/backend";
+import { getSocialLinks } from "@/lib/social-links";
 import VisitorCount from "./VisitorCount";
 
 function InstagramIcon() {
@@ -35,11 +36,15 @@ export default async function StoreFooter() {
         a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
     );
 
-    const socialLinks = [
-        { icon: InstagramIcon, label: "Instagram", href: "#" },
-        { icon: FacebookIcon, label: "Facebook", href: "#" },
-        { icon: YouTubeIcon, label: "YouTube", href: "#" },
-    ];
+    const socialLinks = getSocialLinks().map((link) => ({
+        ...link,
+        icon:
+            link.label === "Instagram"
+                ? InstagramIcon
+                : link.label === "Facebook"
+                  ? FacebookIcon
+                  : YouTubeIcon,
+    }));
 
     return (
         <footer className="bg-brand-black text-white mt-20">
@@ -65,16 +70,20 @@ export default async function StoreFooter() {
                             Premium home improvement &amp; sanitary solutions since 2004.
                         </p>
                         <div className="flex gap-3">
-                            {socialLinks.map((social) => (
-                                <a
-                                    key={social.label}
-                                    href={social.href}
-                                    aria-label={social.label}
-                                    className="w-9 h-9 rounded-lg bg-white/12 hover:bg-brand-orange flex items-center justify-center text-white/50 hover:text-white transition-all duration-200"
-                                >
-                                    <social.icon />
-                                </a>
-                            ))}
+                            {socialLinks.length > 0 ? (
+                                socialLinks.map((social) => (
+                                    <a
+                                        key={social.label}
+                                        href={social.href}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        aria-label={social.label}
+                                        className="w-9 h-9 rounded-lg bg-white/12 hover:bg-brand-orange flex items-center justify-center text-white/50 hover:text-white transition-all duration-200"
+                                    >
+                                        <social.icon />
+                                    </a>
+                                ))
+                            ) : null}
                         </div>
                     </div>
 
@@ -106,6 +115,9 @@ export default async function StoreFooter() {
                             {[
                                 { href: "/about", label: "About Us" },
                                 { href: "/contact", label: "Contact Us" },
+                                { href: "/faq", label: "FAQ" },
+                                { href: "/shipping", label: "Shipping" },
+                                { href: "/terms", label: "Terms of Service" },
                                 { href: "/privacy", label: "Privacy Policy" },
                                 { href: "/refund", label: "Refund Policy" },
                                 { href: "/cart", label: "Your Cart" },

@@ -1,3 +1,28 @@
+function isOtpSmsStub(): boolean {
+  return (
+    process.env.NODE_ENV === "test" ||
+    process.env.LOG_LEVEL === "debug" ||
+    !process.env.MSG91_AUTH_KEY ||
+    !process.env.MSG91_TEMPLATE_ID
+  );
+}
+
+/** Echo OTP to the dev server terminal — never in production. */
+function logDevOtp(phone: string, code: string): void {
+  if (process.env.NODE_ENV === "production") return;
+  // Yellow console.warn so it stands out among JSON request logs.
+  console.warn(`\n🔐 DEV OTP for ${phone}: ${code}  (expires in 5 min — copy from this terminal)\n`);
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      level: "info",
+      msg: "otp_stub",
+      phone,
+      code,
+    }),
+  );
+}
+
 /**
  * SMS OTP dispatch via MSG91's v5 OTP API.
  *
@@ -5,30 +30,24 @@
  *   - NODE_ENV=test or LOG_LEVEL=debug (local dev / tests), OR
  *   - MSG91 isn't configured (no auth key / template id).
  * This lets the whole OTP flow run without real SMS credits or a DLT template.
+ *
+ * In all non-production environments the OTP is also printed to the server
+ * terminal so local login works without SMS or browser DevTools.
  */
 export async function sendOtp(phone: string, code: string): Promise<void> {
   const authKey = process.env.MSG91_AUTH_KEY;
   const templateId = process.env.MSG91_TEMPLATE_ID;
   const senderId = process.env.MSG91_SENDER_ID;
 
-  const stub =
-    process.env.NODE_ENV === "test" ||
-    process.env.LOG_LEVEL === "debug" ||
-    !authKey ||
-    !templateId;
+  const stub = isOtpSmsStub();
 
-  if (stub) {
-    console.log(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        level: "info",
-        msg: "otp_stub",
-        phone,
-        code,
-      }),
-    );
-    return;
+  if (process.env.NODE_ENV !== "production") {
+    logDevOtp(phone, code);
   }
+
+  if (stub) return;
+
+  if (!authKey || !templateId) return;
 
   // MSG91 expects the mobile without a leading "+".
   const mobile = phone.replace(/^\+/, "");

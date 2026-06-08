@@ -1,5 +1,8 @@
 import type { VariantDimension, ProductSKU } from "@veronica/contracts";
 
+/** Admin editor SKU row — price is null until entered (0 is valid once set). */
+export type EditableSku = Omit<ProductSKU, "price"> & { price: number | null };
+
 /**
  * Pure helpers backing the admin {@link VariantsEditor}: build the cartesian
  * SKU matrix from variant dimensions and re-sync it on change while preserving
@@ -47,9 +50,9 @@ function codeSuffix(dimensionValues: Record<string, string>): string {
  */
 export function syncSkus(
   dimensions: VariantDimension[],
-  existing: ProductSKU[],
+  existing: EditableSku[],
   codePrefix: string,
-): ProductSKU[] {
+): EditableSku[] {
   const prefix = codePrefix || "SKU";
   const combos = cartesian(dimensions);
   const hasVariants = combos.length > 1 || (combos[0] && Object.keys(combos[0]).length > 0);
@@ -60,7 +63,7 @@ export function syncSkus(
       {
         id: base?.id ?? tempId(),
         skuCode: base?.skuCode || prefix,
-        price: base?.price ?? 0,
+        price: base?.price ?? null,
         salePrice: base?.salePrice ?? null,
         dimensionValues: {},
         attributes: base?.attributes,
@@ -76,7 +79,7 @@ export function syncSkus(
     return {
       id: prev?.id ?? tempId(),
       skuCode: prev?.skuCode || (suffix ? `${prefix}-${suffix}` : prefix),
-      price: prev?.price ?? 0,
+      price: prev?.price ?? null,
       salePrice: prev?.salePrice ?? null,
       dimensionValues,
       attributes: prev?.attributes,

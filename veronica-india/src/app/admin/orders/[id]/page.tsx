@@ -6,6 +6,8 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Loader2, ChevronLeft, Check, ArrowRight, ArrowLeft, Clock } from "lucide-react";
 import { adminApi } from "@/lib/admin-api";
+import AdminProductThumb from "@/components/admin/AdminProductThumb";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
 
 /** Move an order one fulfilment stage back. */
 const PREV_STATUS: Record<string, string> = {
@@ -70,6 +72,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   // Event time the admin can set (datetime-local). Empty = use the server's "now".
   const [eventTime, setEventTime] = useState("");
+  const [statusConfirm, setStatusConfirm] = useState<{ next: string; label: string } | null>(null);
 
   async function setStatus(status: string) {
     try {
@@ -129,14 +132,10 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         // Confirm before override/correction changes (cancel, refund, going back,
         // or re-setting a stage). The guided "Mark as next" stays one-click.
         const change = (next: string) => {
-          if (
-            window.confirm(
-              `Change ${order.orderNumber} from “${order.status}” to “${next}”?\n\n` +
-                `This updates the order status and adds a timeline entry. Previous history is kept.`,
-            )
-          ) {
-            setStatus(next);
-          }
+          setStatusConfirm({
+            next,
+            label: next.replace(/_/g, " "),
+          });
         };
 
         return (
@@ -227,10 +226,16 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
             {/* Side actions */}
             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-border-light">
-              <button onClick={() => setStatus("cancelled")} className="px-3 py-1.5 rounded-full text-xs font-semibold border border-border text-danger hover:border-danger">
+              <button
+                onClick={() => change("cancelled")}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold border border-border text-danger hover:border-danger"
+              >
                 Cancel order
               </button>
-              <button onClick={() => setStatus("refunded")} className="px-3 py-1.5 rounded-full text-xs font-semibold border border-border text-text-secondary hover:border-brand-orange hover:text-brand-orange">
+              <button
+                onClick={() => change("refunded")}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold border border-border text-text-secondary hover:border-brand-orange hover:text-brand-orange"
+              >
                 Mark refunded
               </button>
             </div>
@@ -263,11 +268,8 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         <div className="divide-y divide-border-light">
           {order.items.map((it, i) => (
             <div key={i} className="flex gap-3 p-3.5">
-              <div className="w-14 h-14 bg-surface-dim rounded-lg overflow-hidden shrink-0 border border-border-light">
-                {it.imageUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={it.imageUrl} alt="" className="w-full h-full object-contain p-1" />
-                )}
+              <div className="w-14 h-14 bg-surface-dim rounded-lg overflow-hidden shrink-0 border border-border-light flex items-center justify-center">
+                <AdminProductThumb src={it.imageUrl} className="p-1" iconSize={20} />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-text-primary line-clamp-2">{it.productName}</p>
@@ -321,6 +323,21 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={statusConfirm != null}
+        title="Change order status?"
+        message={
+          statusConfirm
+            ? `Change ${order.orderNumber} from “${order.status}” to “${statusConfirm.label}”? This updates the order status and adds a timeline entry.`
+            : ""
+        }
+        confirmLabel="Update status"
+        onCancel={() => setStatusConfirm(null)}
+        onConfirm={() => {
+          if (statusConfirm) void setStatus(statusConfirm.next);
+          setStatusConfirm(null);
+        }}
+      />
     </div>
   );
 }

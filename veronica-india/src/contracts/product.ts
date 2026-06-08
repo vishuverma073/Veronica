@@ -65,7 +65,12 @@ export const ProductSchema = z.object({
         z.object({ url: z.string(), sortOrder: z.number().int().optional() }),
       ]),
     )
-    .transform((arr) => arr.map((img) => (typeof img === "string" ? img : img.url))),
+    .transform((arr) =>
+      arr
+        .map((img) => (typeof img === "string" ? img : img.url))
+        .map((url) => url.trim())
+        .filter(Boolean),
+    ),
   dimensions: z.array(VariantDimensionSchema).default([]),
   skus: z.array(ProductSKUSchema),
   specifications: z.array(SpecificationSchema).optional(),
@@ -82,7 +87,12 @@ export const ProductListItemSchema = z.object({
   name: z.string(),
   slug: z.string(),
   categoryId: IdSchema,
-  image: z.string(),
+  // Real API returns null when there is no primary image; normalize to "" so
+  // grids still render and thumbnail helpers can show a placeholder.
+  image: z
+    .string()
+    .nullish()
+    .transform((v) => v?.trim() ?? ""),
   minPrice: MoneySchema,
   maxBasePrice: MoneySchema,
   bestDiscount: z.number().int().min(0).max(100),
@@ -95,12 +105,58 @@ export const ProductListItemSchema = z.object({
   // every storefront grid (bestsellers/new arrivals/category) against the real API.
   skuCount: z.number().int().nonnegative().optional(),
   tags: z.array(z.string()).default([]),
+  /** Size values from variant dimensions (Size / Overall Size) for category filters. */
+  sizes: z.array(z.string()).default([]),
 });
 export type ProductListItem = z.infer<typeof ProductListItemSchema>;
 
-/** Admin create payload — id and computed fields are server-assigned. */
-export const AdminProductCreateSchema = ProductSchema.omit({ id: true }).extend({
+// ─── Admin product write payloads (server assigns ids) ─────────────────────
+
+export const ProductImageInputSchema = z.object({
+  url: z.string().min(1),
+  alt: z.string().optional(),
+  sortOrder: z.number().int().default(0),
+});
+
+export const DimensionValueInputSchema = z.object({
+  value: z.string().min(1),
+  label: z.string().optional(),
+  sortOrder: z.number().int().default(0),
+});
+
+export const DimensionInputSchema = z.object({
+  name: z.string().min(1),
+  sortOrder: z.number().int().default(0),
+  values: z.array(DimensionValueInputSchema).default([]),
+});
+
+export const SkuInputSchema = z.object({
+  skuCode: z.string().min(1),
+  price: MoneySchema,
+  salePrice: MoneySchema.nullable().default(null),
+  dimensionValues: z.record(z.string(), z.string()).default({}),
+  attributes: z.record(z.string(), z.string()).optional(),
+  stock: z.number().int().nullable().optional(),
+});
+
+/** Admin create payload — product, SKU, and dimension ids are server-assigned. */
+export const AdminProductCreateSchema = z.object({
+  categoryId: IdSchema,
+  name: z.string().min(1),
   slug: z.string().optional(),
+  description: z.string().default(""),
+  status: ProductStatusSchema.default("draft"),
+  isBestseller: z.boolean().default(false),
+  isNew: z.boolean().default(false),
+  isFeatured: z.boolean().default(false),
+  tags: z.array(z.string()).default([]),
+  specifications: z.array(SpecificationSchema).optional(),
+  includedAccessories: z.array(z.string()).optional(),
+  images: z
+    .array(z.union([z.string(), ProductImageInputSchema]))
+    .default([]),
+  dimensions: z.array(DimensionInputSchema).default([]),
+  skus: z.array(SkuInputSchema).default([]),
 });
 export type AdminProductCreate = z.infer<typeof AdminProductCreateSchema>;
 

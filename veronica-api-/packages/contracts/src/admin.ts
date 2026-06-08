@@ -92,6 +92,7 @@ export const AdminProductListItemSchema = z.object({
   isBestseller: z.boolean(),
   isNew: z.boolean(),
   isFeatured: z.boolean(),
+  categoryId: IdSchema,
   categoryName: z.string(),
   primaryImage: UrlSchema.nullable(),
   minPrice: PriceSchema,
@@ -127,7 +128,10 @@ export type AdminCategoryPatch = z.infer<typeof AdminCategoryPatchSchema>;
 
 export const AdminCategoryListItemSchema = CategorySchema.extend({
   childCount: z.number().int(),
+  /** Non-archived products assigned directly to this category. */
   productCount: z.number().int(),
+  /** Non-archived products in this category and all descendants. */
+  subtreeProductCount: z.number().int(),
 });
 export type AdminCategoryListItem = z.infer<typeof AdminCategoryListItemSchema>;
 

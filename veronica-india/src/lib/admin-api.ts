@@ -9,14 +9,15 @@
  * A 401 clears the session so the layout bounces the user back to /login.
  */
 import { z } from "zod";
-import { API_BASE, USE_MOCKS } from "@/lib/api-config";
+import { getApiBase, USE_MOCKS } from "@/lib/api-config";
+import { logApiFetch } from "@/lib/api-debug";
 import { mocksReady } from "@/lib/mocks-ready";
 import { getAdminToken, useAdminAuthStore } from "@/store/adminAuthStore";
 import {
   AdminLoginResponseSchema,
   ProductSchema,
   CategorySchema,
-  CategoryListSchema,
+  AdminCategoryListSchema,
   HomeConfigSchema,
   SettingsSchema,
   UploadResultSchema,
@@ -44,6 +45,7 @@ const BeAdminProductListItem = z.object({
   isBestseller: z.boolean(),
   isNew: z.boolean(),
   isFeatured: z.boolean().default(false),
+  categoryId: z.number().int().positive(),
   categoryName: z.string().optional(),
   primaryImage: z.string().nullable().optional(),
   minPrice: z.number().default(0),
@@ -65,7 +67,7 @@ function mapAdminProduct(p: z.infer<typeof BeAdminProductListItem>): AdminListPr
     id: p.id,
     name: p.name,
     slug: p.slug,
-    categoryId: 0, // not needed by the admin list; backend omits it here
+    categoryId: p.categoryId,
     categoryName: p.categoryName ?? "",
     image: p.primaryImage ?? "",
     minPrice: p.minPrice,
@@ -77,6 +79,7 @@ function mapAdminProduct(p: z.infer<typeof BeAdminProductListItem>): AdminListPr
     status: p.status,
     skuCount: p.skuCount,
     tags: [],
+    sizes: [],
   };
 }
 
@@ -96,6 +99,36 @@ const AdminOrderListSchema = z.object({
   nextCursor: z.string().nullable().optional(),
 });
 export type AdminOrderItem = z.infer<typeof AdminOrderItemSchema>;
+
+const BeAuditEntrySchema = z.object({
+  id: z.number(),
+  actorUserId: z.string().nullish(),
+  actorEmail: z.string().nullish(),
+  action: z.string(),
+  resourceType: z.string(),
+  resourceId: z.string(),
+  createdAt: z.string(),
+  changes: z.unknown().nullable(),
+});
+const BeAuditListSchema = z.object({
+  items: z.array(BeAuditEntrySchema),
+  nextCursor: z.string().nullable().optional(),
+});
+export type AdminAuditEntry = {
+  id: number;
+  actorEmail: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  createdAt: string;
+  changes: unknown | null;
+};
+export type AdminAuditListParams = {
+  cursor?: string;
+  resource_type?: string;
+  actor_user_id?: string;
+};
+export type PaginatedResult<T> = { items: T[]; nextCursor: string | null };
 
 const optStr = z.string().nullish().transform((v) => v ?? "");
 const AdminOrderDetailSchema = z.object({
@@ -255,7 +288,10 @@ async function req<T>(path: string, opts: ReqOptions<T> = {}): Promise<T> {
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const url = `${getApiBase()}${path}`;
+  logApiFetch("start", { method, url });
+
+  const res = await fetch(url, {
     method,
     headers,
     body:
@@ -272,12 +308,18 @@ async function req<T>(path: string, opts: ReqOptions<T> = {}): Promise<T> {
   }
 
   if (!res.ok) {
+    logApiFetch("http_error", { url, method, status: res.status, statusText: res.statusText });
     let code = res.statusText || "error";
     let message: string | undefined;
     try {
       const errBody = await res.json();
       code = errBody.error ?? code;
       message = errBody.message;
+      const fieldErrors = errBody.issues?.fieldErrors as Record<string, string[]> | undefined;
+      const firstField = fieldErrors && Object.keys(fieldErrors)[0];
+      if (firstField && fieldErrors![firstField]?.[0]) {
+        message = `${firstField}: ${fieldErrors![firstField][0]}`;
+      }
     } catch {
       /* non-JSON error body — keep the status text */
     }
@@ -286,22 +328,99 @@ async function req<T>(path: string, opts: ReqOptions<T> = {}): Promise<T> {
 
   if (!schema) return undefined as T;
   const json = await res.json();
-  return schema.parse(json);
+  logApiFetch("response", { url, method, status: res.status });
+  try {
+    return schema.parse(json);
+  } catch (err) {
+    logApiFetch("parse_error", {
+      url,
+      method,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 export interface ProductListParams {
   q?: string;
   status?: "active" | "draft" | "archived";
   flag?: "bestseller" | "new" | "featured";
+  categoryTreeId?: number;
+  cursor?: string;
+  limit?: number;
 }
 
-function toQuery(params: ProductListParams): string {
+function toProductQuery(params: ProductListParams): string {
   const sp = new URLSearchParams();
   if (params.q) sp.set("q", params.q);
   if (params.status) sp.set("status", params.status);
   if (params.flag) sp.set("flag", params.flag);
+  if (params.categoryTreeId != null) sp.set("categoryTreeId", String(params.categoryTreeId));
+  if (params.cursor) sp.set("cursor", params.cursor);
+  if (params.limit != null) sp.set("limit", String(params.limit));
   const s = sp.toString();
   return s ? `?${s}` : "";
+}
+
+function mapAuditEntry(e: z.infer<typeof BeAuditEntrySchema>): AdminAuditEntry {
+  return {
+    id: e.id,
+    actorEmail: e.actorEmail?.trim() || e.actorUserId || "system",
+    action: e.action,
+    resourceType: e.resourceType,
+    resourceId: e.resourceId,
+    createdAt: e.createdAt,
+    changes: e.changes ?? null,
+  };
+}
+
+/**
+ * Translate the admin editor's product shape into the backend create/patch payload.
+ * The real API rejects empty slugs and bare image URL strings as "Invalid request".
+ */
+function mapProductPayloadToBackend(
+  data: AdminProductCreate | AdminProductUpdate,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...data };
+
+  if ("slug" in data) {
+    const slug = data.slug?.trim();
+    if (slug) body.slug = slug;
+    else delete body.slug;
+  }
+
+  if (data.images !== undefined) {
+    body.images = data.images.map((img, i) =>
+      typeof img === "string" ? { url: img, sortOrder: i } : img,
+    );
+  }
+
+  if (data.skus !== undefined) {
+    body.skus = data.skus.map(
+      ({ skuCode, price, salePrice, dimensionValues, attributes, stock }) => ({
+        skuCode,
+        price,
+        salePrice,
+        dimensionValues,
+        attributes,
+        stock,
+      }),
+    );
+  }
+
+  if (data.dimensions !== undefined) {
+    body.dimensions = data.dimensions.map(({ name, sortOrder, values }) => ({
+      name,
+      sortOrder,
+      values: values.map(({ value, label, sortOrder: vSort }) => ({
+        value,
+        label,
+        sortOrder: vSort,
+      })),
+    }));
+  }
+
+  return body;
 }
 
 export const adminApi = {
@@ -330,27 +449,75 @@ export const adminApi = {
   },
 
   // ── Products ──
-  listProducts(params: ProductListParams = {}): Promise<AdminListProduct[]> {
-    return req(`/admin/products${toQuery(params)}`, { schema: BeAdminProductList }).then((r) =>
-      r.items.map(mapAdminProduct),
+  listProductsPage(params: ProductListParams = {}): Promise<PaginatedResult<AdminListProduct>> {
+    return req(`/admin/products${toProductQuery(params)}`, { schema: BeAdminProductList }).then(
+      (r) => ({
+        items: r.items.map(mapAdminProduct),
+        nextCursor: r.nextCursor ?? null,
+      }),
     );
+  },
+  /** Fetches every page matching the filters (for dashboard totals, pickers, etc.). */
+  async listAllProducts(params: Omit<ProductListParams, "cursor" | "limit"> = {}): Promise<AdminListProduct[]> {
+    const items: AdminListProduct[] = [];
+    let cursor: string | null | undefined;
+    for (;;) {
+      const page = await this.listProductsPage({ ...params, cursor: cursor ?? undefined, limit: 100 });
+      items.push(...page.items);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return items;
+  },
+  listProducts(params: ProductListParams = {}): Promise<AdminListProduct[]> {
+    return this.listAllProducts(params);
+  },
+  /** All non-archived products in a category subtree (paginates until exhausted). */
+  async listProductsForCategoryTree(categoryTreeId: number): Promise<AdminListProduct[]> {
+    const items: AdminListProduct[] = [];
+    let cursor: string | null | undefined;
+    for (;;) {
+      const sp = new URLSearchParams();
+      sp.set("categoryTreeId", String(categoryTreeId));
+      sp.set("limit", "100");
+      if (cursor) sp.set("cursor", cursor);
+      const page = await req(`/admin/products?${sp}`, { schema: BeAdminProductList });
+      items.push(...page.items.map(mapAdminProduct));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return items;
   },
   getProduct(id: number): Promise<Product> {
     return req(`/admin/products/${id}`, { schema: ProductSchema });
   },
   createProduct(data: AdminProductCreate): Promise<Product> {
-    return req("/admin/products", { method: "POST", body: data, schema: ProductSchema });
+    return req("/admin/products", {
+      method: "POST",
+      body: mapProductPayloadToBackend(data),
+      schema: ProductSchema,
+    });
   },
   updateProduct(id: number, patch: AdminProductUpdate): Promise<Product> {
-    return req(`/admin/products/${id}`, { method: "PATCH", body: patch, schema: ProductSchema });
+    return req(`/admin/products/${id}`, {
+      method: "PATCH",
+      body: mapProductPayloadToBackend(patch),
+      schema: ProductSchema,
+    });
   },
   deleteProduct(id: number): Promise<void> {
     return req(`/admin/products/${id}`, { method: "DELETE" });
   },
+  archiveProduct(id: number): Promise<void> {
+    return req(`/admin/products/${id}/archive`, { method: "POST" });
+  },
+  restoreProduct(id: number): Promise<void> {
+    return req(`/admin/products/${id}/restore`, { method: "POST" });
+  },
 
   // ── Categories ──
   listCategories(): Promise<Category[]> {
-    return req("/admin/categories", { schema: CategoryListSchema });
+    return req("/admin/categories", { schema: AdminCategoryListSchema });
   },
   createCategory(data: AdminCategoryCreate): Promise<Category> {
     return req("/admin/categories", { method: "POST", body: data, schema: CategorySchema });
@@ -360,6 +527,12 @@ export const adminApi = {
   },
   deleteCategory(id: number): Promise<void> {
     return req(`/admin/categories/${id}`, { method: "DELETE" });
+  },
+  archiveCategory(id: number): Promise<void> {
+    return req(`/admin/categories/${id}/archive`, { method: "POST" });
+  },
+  restoreCategory(id: number): Promise<void> {
+    return req(`/admin/categories/${id}/restore`, { method: "POST" });
   },
 
   // ── Home composer ── (translates the backend's discriminated-union layout)
@@ -381,9 +554,12 @@ export const adminApi = {
   },
 
   // ── Orders ──
-  listOrders(status?: string): Promise<AdminOrderItem[]> {
-    const q = status ? `?status=${encodeURIComponent(status)}` : "";
-    return req(`/admin/orders${q}`, { schema: AdminOrderListSchema }).then((r) => r.items);
+  listOrders(status?: string, q?: string): Promise<AdminOrderItem[]> {
+    const sp = new URLSearchParams();
+    if (status) sp.set("status", status);
+    if (q?.trim()) sp.set("q", q.trim());
+    const qs = sp.toString();
+    return req(`/admin/orders${qs ? `?${qs}` : ""}`, { schema: AdminOrderListSchema }).then((r) => r.items);
   },
   getOrder(id: string): Promise<AdminOrderDetail> {
     return req(`/admin/orders/${id}`, { schema: AdminOrderDetailSchema });
@@ -415,11 +591,24 @@ export const adminApi = {
   async uploadImage(file: File): Promise<string> {
     const form = new FormData();
     form.append("file", file);
-    const res = await req("/admin/upload", {
+    const res = await req("/admin/uploads", {
       method: "POST",
       body: form,
       schema: UploadResultSchema,
     });
     return res.url;
+  },
+
+  // ── Audit log ──
+  listAuditLog(params: AdminAuditListParams = {}): Promise<PaginatedResult<AdminAuditEntry>> {
+    const sp = new URLSearchParams();
+    if (params.cursor) sp.set("cursor", params.cursor);
+    if (params.resource_type) sp.set("resource_type", params.resource_type);
+    if (params.actor_user_id) sp.set("actor_user_id", params.actor_user_id);
+    const qs = sp.toString();
+    return req(`/admin/audit-log${qs ? `?${qs}` : ""}`, { schema: BeAuditListSchema }).then((r) => ({
+      items: r.items.map(mapAuditEntry),
+      nextCursor: r.nextCursor ?? null,
+    }));
   },
 };

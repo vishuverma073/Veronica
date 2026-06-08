@@ -5,6 +5,7 @@ import type {
   VariantDimension,
   ProductSKU,
 } from "@veronica/contracts";
+import { extractProductSizes } from "@/lib/product-sizes";
 import { slugify } from "@/lib/utils";
 
 // Deterministic mock data → no hydration drift between SSR and client.
@@ -168,5 +169,6 @@ export function toListItem(p: Product): ProductListItem {
     status: p.status,
     skuCount: p.skus.length,
     tags: p.tags,
+    sizes: extractProductSizes(p.skus, p.dimensions),
   };
 }

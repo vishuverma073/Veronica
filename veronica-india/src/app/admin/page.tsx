@@ -1,24 +1,33 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { Package, FolderTree, Plus, AlertCircle } from "lucide-react";
 import { useProducts } from "@/lib/admin-hooks";
 import { useCategories } from "@/lib/admin-hooks";
 import StatusPill from "@/components/admin/StatusPill";
+import AdminProductThumb from "@/components/admin/AdminProductThumb";
+import ProductRowActions from "@/components/admin/ProductRowActions";
 
 /**
- * Admin dashboard — backend-driven (SWR over the MSW admin endpoints), no
- * longer reading the legacy in-memory `data.ts`.
+ * Admin dashboard — product/category counts and the five most recently added
+ * products (by id, excluding archived). Refetches on mount so create/delete
+ * elsewhere is reflected when you return here.
  */
 export default function AdminDashboard() {
-  const { data: products, isLoading: pLoading, error: pError } = useProducts();
+  const { data: products, isLoading: pLoading, error: pError, mutate } = useProducts();
   const { data: categories, isLoading: cLoading } = useCategories();
 
-  const total = products?.length ?? 0;
-  const active = products?.filter((p) => p.status === "active").length ?? 0;
-  const draft = products?.filter((p) => p.status === "draft").length ?? 0;
+  useEffect(() => {
+    void mutate();
+  }, [mutate]);
+
+  const catalog = products ?? [];
+  const active = catalog.filter((p) => p.status === "active").length;
+  const draft = catalog.filter((p) => p.status === "draft").length;
+  const total = active + draft;
   const rootCats = categories?.filter((c) => c.parentId === null).length ?? 0;
-  const recent = (products ?? []).slice(-5).reverse();
+  const recent = [...catalog].sort((a, b) => b.id - a.id).slice(0, 5);
 
   const stats = [
     {
@@ -81,8 +90,8 @@ export default function AdminDashboard() {
         </Link>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        <div className="px-4 py-3 border-b border-border">
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-border-light">
+        <div className="px-4 py-3 border-b border-border-light">
           <h2 className="text-sm font-semibold text-text-primary">Recently Added Products</h2>
         </div>
         {pLoading ? (
@@ -90,23 +99,37 @@ export default function AdminDashboard() {
         ) : recent.length > 0 ? (
           <div className="divide-y divide-border-light">
             {recent.map((product) => (
-              <Link
+              <div
                 key={product.id}
-                href={`/admin/products/${product.id}/edit`}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-dim/50 transition-colors"
+                className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 hover:bg-surface-dim/50 transition-colors"
               >
-                <div className="w-10 h-10 rounded-lg bg-surface-dim overflow-hidden shrink-0 flex items-center justify-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={product.image} alt="" className="w-full h-full object-contain p-1" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-text-primary truncate">{product.name}</p>
-                  <p className="text-[11px] text-text-muted">
-                    {product.skuCount} SKU{product.skuCount !== 1 ? "s" : ""}
-                  </p>
-                </div>
+                <Link
+                  href={`/admin/products/${product.id}/edit`}
+                  className="flex items-center gap-3 flex-1 min-w-0"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-surface-dim overflow-hidden shrink-0 flex items-center justify-center">
+                    <AdminProductThumb src={product.image} className="p-1" iconSize={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-text-primary truncate">{product.name}</p>
+                    <p className="text-[11px] text-text-muted">
+                      {product.skuCount} SKU{product.skuCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                </Link>
                 <StatusPill status={product.status} />
-              </Link>
+                <ProductRowActions
+                  product={{
+                    id: product.id,
+                    name: product.name,
+                    slug: product.slug,
+                    status: product.status,
+                  }}
+                  onChanged={() => {
+                    void mutate();
+                  }}
+                />
+              </div>
             ))}
           </div>
         ) : (

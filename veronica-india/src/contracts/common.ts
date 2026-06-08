@@ -13,8 +13,14 @@ import { z } from "zod";
 export const IdSchema = z.number().int().positive();
 export type Id = z.infer<typeof IdSchema>;
 
-/** Money in INR, expressed in rupees (not paise). Non-negative. */
-export const MoneySchema = z.number().nonnegative();
+/** Matches Postgres `numeric(10, 2)` — max ₹99,999,999.99. */
+export const MAX_MONEY_RUPEES = 99_999_999.99;
+
+/** Money in INR, expressed in rupees (not paise). Non-negative, within DB range. */
+export const MoneySchema = z
+  .number()
+  .nonnegative()
+  .max(MAX_MONEY_RUPEES, `Price must be at most ₹${MAX_MONEY_RUPEES.toLocaleString("en-IN")}`);
 export type Money = z.infer<typeof MoneySchema>;
 
 /** An authenticated admin/merchant user. */

@@ -1,13 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { Plus, Pencil, Trash2, ChevronDown, ChevronRight, FolderTree, X, CornerDownRight, Package, SquarePen } from "lucide-react";
+import { Plus, FolderTree, X } from "lucide-react";
 import type { Category } from "@veronica/contracts";
-import { useCategories, useProducts } from "@/lib/admin-hooks";
+import { useCategories, useCategoryProducts } from "@/lib/admin-hooks";
 import { adminApi, AdminApiError, type AdminListProduct } from "@/lib/admin-api";
 import { toast } from "sonner";
-import { cn, slugify, formatPrice } from "@/lib/utils";
+import { cn, slugify, normalizeImageInput } from "@/lib/utils";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
+import { CategoryTreePanel, CategoryProductsPanel } from "@/components/admin/CategoryTree";
+import {
+  buildCategoryParentOptions,
+  getDescendantCount,
+  getSubtreeIds,
+  getSubtreeProductCount,
+} from "@/lib/category-tree";
 import { useSWRConfig } from "swr";
 
 interface DraftCategory {
@@ -21,50 +28,55 @@ interface DraftCategory {
   showInHeader: boolean;
 }
 
+type ConfirmAction =
+  | { kind: "delete-category"; cat: Category }
+  | { kind: "delete-product"; product: AdminListProduct }
+  | { kind: "archive-category"; cat: Category }
+  | { kind: "archive-product"; product: AdminListProduct };
+
 function blankDraft(parentId: number | null = null): DraftCategory {
   return { name: "", slug: "", parentId, description: "", image: "", sortOrder: 0, showInHeader: false };
 }
 
+const DELETE_PRODUCT_MESSAGE =
+  "This product will be permanently deleted and cannot be recovered.";
+
 export default function CategoriesPage() {
   const { data: categories, isLoading } = useCategories();
-  const { data: products } = useProducts();
   const { mutate } = useSWRConfig();
   const [draft, setDraft] = useState<DraftCategory | null>(null);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
-  // Category selected to inspect its products in the right-hand panel.
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const selected = useMemo(
-    () => (categories ?? []).find((c) => c.id === selectedId) ?? null,
-    [categories, selectedId],
-  );
+  const { data: categoryProducts, isLoading: productsLoading } = useCategoryProducts(selectedId);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Alphabetical, top-level first; children sorted A→Z under their parent.
-  const roots = useMemo(
-    () => (categories ?? []).filter((c) => c.parentId === null).sort(byName),
+  const activeCategories = useMemo(
+    () => (categories ?? []).filter((c) => c.status !== "archived"),
     [categories],
   );
-  const childrenOf = (id: number) =>
-    (categories ?? []).filter((c) => c.parentId === id).sort(byName);
 
-  // Subtree helpers (a category + all its descendants). Used so a parent shows
-  // the TOTAL product count across its subcategories, and selecting it lists
-  // every product in the subtree.
-  const subtreeIds = (id: number): number[] => {
-    const ids = [id];
-    for (const child of childrenOf(id)) ids.push(...subtreeIds(child.id));
-    return ids;
-  };
-  const subtreeCount = (id: number): number =>
-    subtreeIds(id).reduce(
-      (sum, cid) => sum + ((categories ?? []).find((c) => c.id === cid)?.productCount ?? 0),
-      0,
+  const selected = useMemo(
+    () => activeCategories.find((c) => c.id === selectedId) ?? null,
+    [activeCategories, selectedId],
+  );
+
+  const productCountMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const c of activeCategories) {
+      if (c.productCount != null) map.set(c.id, c.productCount);
+    }
+    return map;
+  }, [activeCategories]);
+
+  async function refreshAll() {
+    await mutate(["admin/categories"]);
+    await mutate(
+      (key) => Array.isArray(key) && key[0] === "admin/products",
+      undefined,
+      { revalidate: true },
     );
-  const subtreeNames = (id: number): string[] =>
-    subtreeIds(id)
-      .map((cid) => (categories ?? []).find((c) => c.id === cid)?.name)
-      .filter((n): n is string => Boolean(n));
-
-  const refresh = () => mutate(["admin/categories"]);
+  }
 
   const toggleCollapse = (id: number) =>
     setCollapsed((s) => {
@@ -74,101 +86,140 @@ export default function CategoriesPage() {
       return next;
     });
 
-  async function handleDelete(cat: Category) {
-    if (!confirm(`Delete "${cat.name}"?`)) return;
-    try {
-      await adminApi.deleteCategory(cat.id);
-      toast.success("Category deleted");
-      await refresh();
-    } catch (err) {
-      if (err instanceof AdminApiError && err.status === 409) {
-        toast.error("Can’t delete — it still has sub-categories or products.");
-      } else {
-        toast.error("Delete failed");
-      }
+  function clearSelectionIfAffected(categoryId: number) {
+    if (selectedId != null && getSubtreeIds(activeCategories, categoryId).includes(selectedId)) {
+      setSelectedId(null);
     }
   }
 
-  function Row({
-    cat,
-    isChild,
-    expanded,
-    onToggle,
-    isSelected,
-    onSelect,
-  }: {
-    cat: Category;
-    isChild: boolean;
-    expanded?: boolean;
-    onToggle?: () => void;
-    isSelected?: boolean;
-    onSelect?: () => void;
-  }) {
-    const kids = childrenOf(cat.id);
-    const hasKids = !isChild && kids.length > 0;
-    const count = subtreeCount(cat.id); // includes subcategory products
-    return (
-      <div className={cn("flex items-center gap-2 px-3 py-2.5", isSelected && "bg-brand-orange/10")}>
-        {isChild ? (
-          <CornerDownRight size={15} className="text-text-muted/50 shrink-0" />
-        ) : hasKids ? (
-          <button
-            onClick={onToggle}
-            className="text-text-muted hover:text-brand-orange shrink-0"
-            aria-label={expanded ? "Collapse" : "Expand"}
-          >
-            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </button>
-        ) : (
-          <span className="w-4 shrink-0" aria-hidden />
-        )}
-        <button onClick={onSelect} className="flex-1 min-w-0 text-left" title="View products">
-          <p className={cn("font-medium truncate", isChild ? "text-[13px]" : "text-sm", isSelected ? "text-brand-orange" : "text-text-primary")}>
-            {cat.name}
-          </p>
-          <p className="text-[11px] text-text-muted">
-            /{cat.slug} · {count} product{count === 1 ? "" : "s"}
-            {!isChild && kids.length > 0 && ` · ${kids.length} sub`}
-          </p>
-        </button>
-        {!isChild && (
-          <button
-            onClick={() => setDraft(blankDraft(cat.id))}
-            className="p-1.5 rounded-lg text-text-muted hover:text-brand-orange hover:bg-surface-dim"
-            aria-label="Add sub-category"
-            title="Add sub-category"
-          >
-            <Plus size={15} />
-          </button>
-        )}
-        <button
-          onClick={() =>
-            setDraft({
-              id: cat.id,
-              name: cat.name,
-              slug: cat.slug,
-              parentId: cat.parentId,
-              description: cat.description,
-              image: cat.image ?? "",
-              sortOrder: cat.sortOrder,
-              showInHeader: cat.showInHeader,
-            })
-          }
-          className="p-1.5 rounded-lg text-text-muted hover:text-brand-orange hover:bg-surface-dim"
-          aria-label="Edit"
-        >
-          <Pencil size={15} />
-        </button>
-        <button
-          onClick={() => handleDelete(cat)}
-          className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-red-50"
-          aria-label="Delete"
-        >
-          <Trash2 size={15} />
-        </button>
-      </div>
-    );
+  function requestArchiveCategory(cat: Category) {
+    setConfirm({ kind: "archive-category", cat });
   }
+
+  function requestArchiveProduct(product: AdminListProduct) {
+    setConfirm({ kind: "archive-product", product });
+  }
+
+  async function handleArchiveCategory(cat: Category) {
+    try {
+      await adminApi.archiveCategory(cat.id);
+      toast.success(`“${cat.name}” archived`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              try {
+                await adminApi.restoreCategory(cat.id);
+                await refreshAll();
+                toast.success("Category restored");
+              } catch {
+                toast.error("Restore failed");
+              }
+            })();
+          },
+        },
+      });
+      clearSelectionIfAffected(cat.id);
+      await refreshAll();
+    } catch {
+      toast.error("Archive failed");
+    }
+  }
+
+  async function handleArchiveProduct(product: AdminListProduct) {
+    try {
+      await adminApi.archiveProduct(product.id);
+      toast.success(`“${product.name}” archived`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              try {
+                await adminApi.restoreProduct(product.id);
+                await refreshAll();
+                toast.success("Product restored");
+              } catch {
+                toast.error("Restore failed");
+              }
+            })();
+          },
+        },
+      });
+      await refreshAll();
+    } catch {
+      toast.error("Archive failed");
+    }
+  }
+
+  function requestDeleteCategory(cat: Category) {
+    setConfirm({ kind: "delete-category", cat });
+  }
+
+  async function handleConfirmDelete() {
+    if (!confirm) return;
+    if (confirm.kind === "archive-category") {
+      setBusy(true);
+      try {
+        await handleArchiveCategory(confirm.cat);
+        setConfirm(null);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (confirm.kind === "archive-product") {
+      setBusy(true);
+      try {
+        await handleArchiveProduct(confirm.product);
+        setConfirm(null);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    setBusy(true);
+    try {
+      if (confirm.kind === "delete-category") {
+        await adminApi.deleteCategory(confirm.cat.id);
+        toast.success("Category deleted");
+        clearSelectionIfAffected(confirm.cat.id);
+      } else {
+        await adminApi.deleteProduct(confirm.product.id);
+        toast.success("Product deleted");
+      }
+      setConfirm(null);
+      await refreshAll();
+    } catch (err) {
+      if (err instanceof AdminApiError && err.status === 409) {
+        toast.error("Delete failed — category has dependencies.");
+      } else {
+        toast.error("Delete failed");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReorderSiblings(parentId: number | null, orderedIds: number[]) {
+    try {
+      await Promise.all(
+        orderedIds.map((id, index) => adminApi.updateCategory(id, { sortOrder: index })),
+      );
+      await refreshAll();
+    } catch {
+      toast.error("Reorder failed");
+    }
+  }
+
+  const deleteCategoryMessage = useMemo(() => {
+    if (confirm?.kind !== "delete-category") return "";
+    const cat = confirm.cat;
+    const childCount = getDescendantCount(activeCategories, cat.id);
+    const productCount = getSubtreeProductCount(activeCategories, cat.id, productCountMap);
+    return `This category contains ${childCount} child categor${childCount === 1 ? "y" : "ies"} and ${productCount} product${productCount === 1 ? "" : "s"}. Deleting it will permanently delete all related categories and products. This action cannot be undone.`;
+  }, [confirm, activeCategories, productCountMap]);
+
+  const hasRoots = activeCategories.some((c) => c.parentId === null);
 
   return (
     <div className="max-w-6xl">
@@ -180,58 +231,49 @@ export default function CategoriesPage() {
       </div>
 
       <div className="lg:grid lg:grid-cols-2 lg:gap-6 lg:items-start">
-        {/* Left: category tree (click a category to inspect its products → right) */}
         <div>
           {isLoading ? (
             <p className="text-text-muted text-sm py-10 text-center">Loading…</p>
-          ) : roots.length === 0 ? (
+          ) : !hasRoots ? (
             <div className="flex flex-col items-center gap-2 py-16 text-text-muted">
               <FolderTree size={32} />
               <p className="text-sm">No categories yet.</p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {roots.map((root) => {
-                const kids = childrenOf(root.id);
-                const expanded = !collapsed.has(root.id);
-                return (
-                  <div key={root.id} className="bg-white border border-border-light rounded-xl shadow-sm overflow-hidden">
-                    <Row
-                      cat={root}
-                      isChild={false}
-                      expanded={expanded}
-                      onToggle={() => toggleCollapse(root.id)}
-                      isSelected={selectedId === root.id}
-                      onSelect={() => setSelectedId(root.id)}
-                    />
-                    {kids.length > 0 && expanded && (
-                      <div className="border-t border-border-light bg-surface-dim/40 pl-4">
-                        <div className="border-l-2 border-border divide-y divide-border-light/70">
-                          {kids.map((child) => (
-                            <Row
-                              key={child.id}
-                              cat={child}
-                              isChild
-                              isSelected={selectedId === child.id}
-                              onSelect={() => setSelectedId(child.id)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <CategoryTreePanel
+              categories={activeCategories}
+              productCountMap={productCountMap}
+              collapsed={collapsed}
+              selectedId={selectedId}
+              onToggleCollapse={toggleCollapse}
+              onSelect={setSelectedId}
+              onAddChild={(parentId) => setDraft(blankDraft(parentId))}
+              onEdit={(cat) =>
+                setDraft({
+                  id: cat.id,
+                  name: cat.name,
+                  slug: cat.slug,
+                  parentId: cat.parentId,
+                  description: cat.description,
+                  image: cat.image ?? "",
+                  sortOrder: cat.sortOrder,
+                  showInHeader: cat.showInHeader,
+                })
+              }
+              onArchive={requestArchiveCategory}
+              onDelete={requestDeleteCategory}
+              onReorderSiblings={handleReorderSiblings}
+            />
           )}
         </div>
 
-        {/* Right: products in the selected category (and its subcategories), each editable */}
         <div className="mt-5 lg:mt-0 lg:sticky lg:top-20">
           <CategoryProductsPanel
             selected={selected}
-            categoryNames={selected ? subtreeNames(selected.id) : []}
-            products={products ?? []}
+            products={categoryProducts ?? []}
+            productsLoading={productsLoading}
+            onArchive={(product) => requestArchiveProduct(product)}
+            onDelete={(product) => setConfirm({ kind: "delete-product", product })}
           />
         </div>
       </div>
@@ -239,128 +281,63 @@ export default function CategoriesPage() {
       {draft && (
         <CategoryDrawer
           draft={draft}
-          roots={roots}
+          categories={activeCategories}
           onClose={() => setDraft(null)}
           onSaved={async () => {
             setDraft(null);
-            await refresh();
+            await refreshAll();
           }}
         />
       )}
-    </div>
-  );
-}
 
-function byName(a: Category, b: Category) {
-  return a.name.localeCompare(b.name);
-}
-
-/**
- * Right-hand panel: the products in the selected category, each linking to its
- * edit page. Products carry their category NAME on the admin list, so we match
- * by name (a category's own direct products).
- */
-function CategoryProductsPanel({
-  selected,
-  categoryNames,
-  products,
-}: {
-  selected: Category | null;
-  categoryNames: string[]; // the selected category + its subcategories
-  products: AdminListProduct[];
-}) {
-  if (!selected) {
-    return (
-      <div className="hidden lg:flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border-light bg-surface-dim/30 py-20 text-text-muted">
-        <Package size={28} />
-        <p className="text-sm">Select a category to see its products.</p>
-      </div>
-    );
-  }
-
-  // All products across the selected category's subtree (it + its subcategories).
-  const nameSet = new Set(categoryNames);
-  const items = products
-    .filter((p) => nameSet.has(p.categoryName))
-    .sort((a, b) => a.categoryName.localeCompare(b.categoryName) || a.name.localeCompare(b.name));
-  const hasSubs = categoryNames.length > 1;
-
-  return (
-    <div className="rounded-xl border border-border-light bg-white shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border-light">
-        <div className="min-w-0">
-          <p className="text-sm font-bold text-text-primary truncate">{selected.name}</p>
-          <p className="text-[11px] text-text-muted">
-            {items.length} product{items.length === 1 ? "" : "s"}
-            {hasSubs && " · incl. subcategories"}
-          </p>
-        </div>
-        <Link
-          href={`/admin/products/new?category=${selected.id}`}
-          className="btn btn-secondary text-xs px-2.5 py-1.5 shrink-0"
-        >
-          <Plus size={13} /> Add
-        </Link>
-      </div>
-
-      {items.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-14 text-text-muted">
-          <Package size={26} />
-          <p className="text-sm">No products in this category.</p>
-        </div>
-      ) : (
-        <ul className="divide-y divide-border-light max-h-[72vh] overflow-y-auto">
-          {items.map((p) => (
-            <li key={p.id}>
-              <Link
-                href={`/admin/products/${p.id}/edit`}
-                className="flex items-center gap-4 p-3.5 hover:bg-surface-dim/60 group"
-              >
-                <div className="w-20 h-20 rounded-xl bg-[#f4f4f5] border border-border-light overflow-hidden shrink-0 flex items-center justify-center">
-                  {p.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.image} alt="" className="w-full h-full object-contain p-1.5" />
-                  ) : (
-                    <Package size={22} className="text-text-muted" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[15px] font-semibold text-text-primary line-clamp-2">{p.name}</p>
-                  <p className="text-xs text-text-muted mt-0.5">
-                    {formatPrice(p.minPrice)} · {p.status}
-                  </p>
-                  {hasSubs && p.categoryName !== selected.name && (
-                    <p className="text-[11px] text-text-muted/80 mt-0.5">in {p.categoryName}</p>
-                  )}
-                </div>
-                <SquarePen
-                  size={18}
-                  className="text-text-muted group-hover:text-brand-orange shrink-0"
-                  aria-label="Edit product"
-                />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ConfirmDialog
+        open={confirm != null}
+        title={
+          confirm?.kind === "archive-category"
+            ? "Archive category?"
+            : confirm?.kind === "archive-product"
+              ? "Archive product?"
+              : confirm?.kind === "delete-product"
+                ? "Delete product?"
+                : "Delete category?"
+        }
+        message={
+          confirm?.kind === "archive-category"
+            ? `Archive “${confirm.cat.name}” and hide it from the storefront? You can restore it from the Archive page.`
+            : confirm?.kind === "archive-product"
+              ? `Archive “${confirm.product.name}”? It will be hidden from the storefront until restored.`
+              : confirm?.kind === "delete-product"
+                ? DELETE_PRODUCT_MESSAGE
+                : deleteCategoryMessage
+        }
+        confirmLabel={confirm?.kind?.startsWith("archive") ? "Archive" : "Delete"}
+        danger={confirm?.kind === "delete-category" || confirm?.kind === "delete-product"}
+        loading={busy}
+        onCancel={() => !busy && setConfirm(null)}
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 }
 
 function CategoryDrawer({
   draft,
-  roots,
+  categories,
   onClose,
   onSaved,
 }: {
   draft: DraftCategory;
-  roots: Category[];
+  categories: Category[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [form, setForm] = useState(draft);
   const [saving, setSaving] = useState(false);
   const isEdit = draft.id != null;
+  const parentOptions = useMemo(
+    () => buildCategoryParentOptions(categories, draft.id),
+    [categories, draft.id],
+  );
 
   function set<K extends keyof DraftCategory>(key: K, val: DraftCategory[K]) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -371,15 +348,20 @@ function CategoryDrawer({
       toast.error("Name is required");
       return;
     }
+    const name = form.name.trim();
+    const slug = slugify(form.slug.trim() || name);
+    if (!slug) {
+      toast.error("Name must contain at least one letter or number");
+      return;
+    }
     setSaving(true);
     try {
-      const name = form.name.trim();
       const payload = {
         name,
-        slug: form.slug.trim() || slugify(name),
+        slug,
         parentId: form.parentId,
         description: form.description,
-        image: form.image || undefined,
+        image: normalizeImageInput(form.image) ?? undefined,
         sortOrder: form.sortOrder,
         showInHeader: form.showInHeader,
       };
@@ -391,8 +373,15 @@ function CategoryDrawer({
         toast.success("Category created");
       }
       onSaved();
-    } catch {
-      toast.error("Save failed");
+    } catch (err) {
+      const msg =
+        err instanceof AdminApiError
+          ? err.message || err.code
+          : err instanceof Error
+            ? err.message
+            : "Save failed";
+      toast.error(msg);
+    } finally {
       setSaving(false);
     }
   }
@@ -432,13 +421,11 @@ function CategoryDrawer({
               className="input"
             >
               <option value="">— None (root) —</option>
-              {roots
-                .filter((r) => r.id !== draft.id)
-                .map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
+              {parentOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           </div>
           <div>
@@ -463,8 +450,7 @@ function CategoryDrawer({
             <span>
               <span className="block text-sm font-medium text-text-primary">Show in header</span>
               <span className="block text-xs text-text-muted">
-                Display this category in the customer top navigation. Every category always
-                appears in the footer.
+                Display this category in the customer top navigation (nested under its parent).
               </span>
             </span>
           </label>

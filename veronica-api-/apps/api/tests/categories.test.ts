@@ -25,12 +25,12 @@ const children = [
 ];
 
 /** `orderBy` serves root list / children; `limit` serves slug + parent lookups. */
-function mockDb(opts: { rootList?: unknown[]; bySlug?: unknown; children?: unknown[] } = {}): DbClient {
+function mockDb(opts: { rootList?: unknown[]; allList?: unknown[]; bySlug?: unknown; children?: unknown[] } = {}): DbClient {
   return {
     select: () => ({
       from: () => ({
         where: () => ({
-          orderBy: async () => opts.children ?? opts.rootList ?? [],
+          orderBy: async () => opts.allList ?? opts.children ?? opts.rootList ?? [],
           limit: async () => (opts.bySlug ? [opts.bySlug] : []),
         }),
       }),
@@ -49,6 +49,17 @@ describe("GET /categories", () => {
   it("returns [] when there are no root categories", async () => {
     const res = await createApp({ db: mockDb({ rootList: [] }) }).request("/categories");
     expect(await res.json()).toEqual([]);
+  });
+});
+
+describe("GET /categories/all", () => {
+  it("returns every active category in a flat list", async () => {
+    const res = await createApp({ db: mockDb({ allList: [root, ...children] }) }).request(
+      "/categories/all",
+    );
+    expect(res.status).toBe(200);
+    const parsed = CategoryListSchema.parse(await res.json());
+    expect(parsed.length).toBe(3);
   });
 });
 

@@ -79,10 +79,50 @@ describe("admin-api products CRUD", () => {
   });
 
   it("filters by status and flag", async () => {
+    const all = await adminApi.listProducts();
+    expect(all.every((p) => p.status !== "archived")).toBe(true);
+
     const active = await adminApi.listProducts({ status: "active" });
     expect(active.every((p) => p.status === "active")).toBe(true);
+
+    const draft = await adminApi.listProducts({ status: "draft" });
+    expect(draft.every((p) => p.status === "draft")).toBe(true);
+
+    const archived = await adminApi.listProducts({ status: "archived" });
+    expect(archived.every((p) => p.status === "archived")).toBe(true);
+
     const best = await adminApi.listProducts({ flag: "bestseller" });
     expect(best.every((p) => p.isBestseller)).toBe(true);
+    expect(best.every((p) => p.status !== "archived")).toBe(true);
+  });
+
+  it("archive → hidden from default list → visible under archived → restore", async () => {
+    const target = (await adminApi.listProducts({ status: "active" }))[0];
+    expect(target).toBeDefined();
+
+    await adminApi.archiveProduct(target.id);
+    expect((await adminApi.listProducts()).some((p) => p.id === target.id)).toBe(false);
+    expect((await adminApi.listProducts({ status: "archived" })).some((p) => p.id === target.id)).toBe(
+      true,
+    );
+
+    await adminApi.restoreProduct(target.id);
+    expect((await adminApi.listProducts()).some((p) => p.id === target.id)).toBe(true);
+  });
+
+  it("search in default list excludes archived products", async () => {
+    const target = (await adminApi.listProducts({ status: "active" }))[0];
+    const q = target.name.split(/\s+/)[0] ?? target.name.slice(0, 6);
+
+    await adminApi.archiveProduct(target.id);
+
+    const defaultSearch = await adminApi.listProducts({ q });
+    expect(defaultSearch.some((p) => p.id === target.id)).toBe(false);
+
+    const archivedSearch = await adminApi.listProducts({ q, status: "archived" });
+    expect(archivedSearch.some((p) => p.id === target.id)).toBe(true);
+
+    await adminApi.restoreProduct(target.id);
   });
 
   it("creates → reads → updates → deletes a product", async () => {
@@ -121,12 +161,39 @@ describe("admin-api products CRUD", () => {
 describe("admin-api categories", () => {
   beforeEach(authed);
 
-  it("blocks deleting a category that still has products (409)", async () => {
-    // Category 20 (ABS Faucets) has seeded products.
-    await expect(adminApi.deleteCategory(20)).rejects.toMatchObject({
-      name: "AdminApiError",
-      status: 409,
+  it("cascade-deletes a category and its products", async () => {
+    const created = await adminApi.createCategory({
+      name: "Temp Delete Me",
+      slug: "temp-delete-me",
+      parentId: null,
+      description: "",
+      sortOrder: 99,
+      showInHeader: false,
     });
+    const product = await adminApi.createProduct({
+      name: "Temp Product",
+      slug: "temp-product-delete",
+      description: "x",
+      categoryId: created.id,
+      status: "draft",
+      tags: [],
+      images: [],
+      dimensions: [],
+      skus: [{ id: 9002, skuCode: "TMP-1", price: 100, salePrice: null, dimensionValues: {} }],
+      specifications: [],
+      includedAccessories: [],
+    });
+    await adminApi.deleteCategory(created.id);
+    await expect(adminApi.getProduct(product.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("archives and restores a category subtree", async () => {
+    await adminApi.archiveCategory(3);
+    const cats = await adminApi.listCategories();
+    expect(cats.find((c) => c.id === 3)?.status).toBe("archived");
+    await adminApi.restoreCategory(3);
+    const restored = await adminApi.listCategories();
+    expect(restored.find((c) => c.id === 3)?.status).toBe("active");
   });
 
   it("serves home config and settings of the expected shape", async () => {

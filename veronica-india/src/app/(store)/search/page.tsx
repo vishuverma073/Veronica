@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import Link from "next/link";
-import Image from "next/image";
+import { useSearchParams, useRouter } from "next/navigation";
+import useSWR from "swr";
 import { formatPrice } from "@/lib/utils";
+import StoreProductThumb from "@/components/store/StoreProductThumb";
+import ApiErrorState from "@/components/store/ApiErrorState";
 import { backend } from "@/lib/backend";
 import { ProductGridSkeleton } from "@/components/store/Skeletons";
 import { Search, ChevronRight, SearchX, Package } from "lucide-react";
@@ -18,26 +21,48 @@ interface SearchResult {
     image: string;
 }
 
-export default function SearchPage() {
-    const [query, setQuery] = useState("");
+function SearchPageContent() {
+    const searchParams = useSearchParams();
+    const router = useRouter();
+    const initialQuery = searchParams.get("q") ?? "";
+
+    const [query, setQuery] = useState(initialQuery);
     const [results, setResults] = useState<SearchResult[]>([]);
     const [loading, setLoading] = useState(false);
-    // Latest-wins guard: ignore responses from superseded requests so a slow
-    // earlier search can't overwrite the results of a faster later one.
+    const [error, setError] = useState(false);
     const reqRef = useRef(0);
+
+    const { data: categoryShortcuts } = useSWR("search-category-shortcuts", async () => {
+        const navbar = await backend.getNavbar().catch(() => []);
+        if (navbar.length > 0) {
+            return navbar.slice(0, 4).map((c) => ({ slug: c.slug, name: c.name }));
+        }
+        const all = await backend.getCategories().catch(() => []);
+        return all
+            .filter((c) => c.parentId == null)
+            .slice(0, 4)
+            .map((c) => ({ slug: c.slug, name: c.name }));
+    });
+
+    const browseAllHref =
+        categoryShortcuts?.[0] != null
+            ? `/category/${categoryShortcuts[0].slug}`
+            : "/search";
 
     const search = useCallback(async (q: string) => {
         const reqId = ++reqRef.current;
         if (!q.trim()) {
             setResults([]);
             setLoading(false);
+            setError(false);
             return;
         }
 
         setLoading(true);
+        setError(false);
         try {
             const items = await backend.searchProducts(q);
-            if (reqId !== reqRef.current) return; // a newer query superseded this one
+            if (reqId !== reqRef.current) return;
             setResults(
                 items.map((p) => ({
                     id: p.id,
@@ -49,26 +74,45 @@ export default function SearchPage() {
                     image: p.image,
                 })),
             );
-        } catch (err) {
-            if (reqId === reqRef.current) console.error("Search error:", err);
+        } catch {
+            if (reqId === reqRef.current) {
+                setError(true);
+                setResults([]);
+            }
         } finally {
             if (reqId === reqRef.current) setLoading(false);
         }
     }, []);
 
     useEffect(() => {
+        const q = searchParams.get("q") ?? "";
+        setQuery((prev) => (prev === q ? prev : q));
+    }, [searchParams]);
+
+    useEffect(() => {
         const timer = setTimeout(() => search(query), 300);
         return () => clearTimeout(timer);
     }, [query, search]);
 
+    useEffect(() => {
+        const trimmed = query.trim();
+        const current = searchParams.get("q") ?? "";
+        if (trimmed === current) return;
+
+        const params = new URLSearchParams(searchParams.toString());
+        if (trimmed) params.set("q", trimmed);
+        else params.delete("q");
+        const qs = params.toString();
+        router.replace(qs ? `/search?${qs}` : "/search", { scroll: false });
+    }, [query, router, searchParams]);
+
     return (
         <div className="max-w-3xl mx-auto px-4 py-8">
             <h1 className="sr-only">Search products</h1>
-            {/* Search Input */}
             <div className="relative mb-10">
                 <Search size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-text-muted" />
                 <input
-                    type="text"
+                    type="search"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search products..."
@@ -77,21 +121,26 @@ export default function SearchPage() {
                 />
             </div>
 
-            {/* Results */}
             {loading && (
                 <div className="py-4">
                     <ProductGridSkeleton count={6} />
                 </div>
             )}
 
-            {!loading && query && results.length === 0 && (
+            {!loading && error && query && (
+                <ApiErrorState
+                    title="Search unavailable"
+                    message="We couldn't reach the catalog. Check your connection and try again."
+                    onRetry={() => search(query)}
+                />
+            )}
+
+            {!loading && !error && query && results.length === 0 && (
                 <div className="empty-state">
                     <div className="empty-state-icon">
                         <SearchX size={28} strokeWidth={1.5} />
                     </div>
-                    <p className="text-text-secondary font-medium mb-1">
-                        No results found
-                    </p>
+                    <p className="text-text-secondary font-medium mb-1">No results found</p>
                     <p className="text-sm text-text-muted">
                         Try searching for &quot;sink&quot;, &quot;faucet&quot;, or &quot;shower&quot;
                     </p>
@@ -110,7 +159,7 @@ export default function SearchPage() {
                             className="flex items-center gap-4 p-3.5 rounded-2xl hover:bg-surface-dim transition-all duration-200 group border border-transparent hover:border-border-light"
                         >
                             <div className="w-16 h-16 bg-surface-dim rounded-xl overflow-hidden shrink-0 border border-border-light group-hover:border-border transition-colors">
-                                <Image
+                                <StoreProductThumb
                                     src={item.image}
                                     alt={item.name}
                                     width={64}
@@ -145,26 +194,20 @@ export default function SearchPage() {
                 </div>
             )}
 
-            {/* Popular Categories (when no query) */}
             {!query && (
                 <div className="animate-fade-in">
                     <h2 className="text-[11px] font-bold uppercase tracking-[0.15em] text-text-muted mb-5">
                         Popular Categories
                     </h2>
                     <div className="grid grid-cols-2 gap-3">
-                        {[
-                            { slug: "kitchen-sinks", name: "Kitchen Sinks", icon: Package },
-                            { slug: "health-faucet-sets", name: "Health Faucets", icon: Package },
-                            { slug: "bathroom-accessories", name: "Bathroom Accessories", icon: Package },
-                            { slug: "plumbing-fittings", name: "Plumbing & Fittings", icon: Package },
-                        ].map((cat) => (
+                        {(categoryShortcuts ?? []).map((cat) => (
                             <Link
                                 key={cat.slug}
                                 href={`/category/${cat.slug}`}
                                 className="flex items-center gap-3.5 p-4 rounded-2xl bg-surface-card border border-border-light hover:border-border hover:shadow-card transition-all duration-200 group"
                             >
                                 <div className="w-10 h-10 rounded-xl bg-brand-orange-light flex items-center justify-center text-brand-orange">
-                                    <cat.icon size={18} strokeWidth={1.8} />
+                                    <Package size={18} strokeWidth={1.8} />
                                 </div>
                                 <div>
                                     <span className="text-sm font-semibold text-text-primary group-hover:text-brand-orange transition-colors">
@@ -175,7 +218,6 @@ export default function SearchPage() {
                         ))}
                     </div>
 
-                    {/* Trending Searches */}
                     <div className="mt-8">
                         <h2 className="text-[11px] font-bold uppercase tracking-[0.15em] text-text-muted mb-4">
                             Trending Searches
@@ -184,6 +226,7 @@ export default function SearchPage() {
                             {["Kitchen Sink", "Health Faucet", "Floor Drain", "Braided Pipe", "Wash Basin Coupling", "Shower Tube"].map((term) => (
                                 <button
                                     key={term}
+                                    type="button"
                                     onClick={() => setQuery(term)}
                                     className="px-4 py-2 text-sm font-medium rounded-full bg-surface-dim text-text-secondary hover:bg-brand-orange-light hover:text-brand-orange transition-all duration-200 cursor-pointer"
                                 >
@@ -193,12 +236,8 @@ export default function SearchPage() {
                         </div>
                     </div>
 
-                    {/* Browse All */}
                     <div className="mt-8 text-center">
-                        <Link
-                            href="/category/kitchen-sinks"
-                            className="btn btn-secondary inline-flex"
-                        >
+                        <Link href={browseAllHref} className="btn btn-secondary inline-flex">
                             Browse All Products
                             <ChevronRight size={16} />
                         </Link>
@@ -206,5 +245,21 @@ export default function SearchPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+function SearchFallback() {
+    return (
+        <div className="max-w-3xl mx-auto px-4 py-8">
+            <ProductGridSkeleton count={4} />
+        </div>
+    );
+}
+
+export default function SearchPage() {
+    return (
+        <Suspense fallback={<SearchFallback />}>
+            <SearchPageContent />
+        </Suspense>
     );
 }

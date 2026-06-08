@@ -1,15 +1,11 @@
 import Link from "next/link";
 import { SearchX, Home, Search } from "lucide-react";
-
-const CATEGORIES = [
-  { slug: "kitchen-sinks", name: "Kitchen Sinks" },
-  { slug: "health-faucet-sets", name: "Health Faucets" },
-  { slug: "bathroom-accessories", name: "Bathroom" },
-  { slug: "plumbing-fittings", name: "Plumbing & Fittings" },
-];
+import { getCategoryShortcuts } from "@/lib/category-shortcuts";
 
 /** On-brand 404 for the storefront (renders with Header/Footer chrome). */
-export default function NotFound() {
+export default async function NotFound() {
+  const categories = await getCategoryShortcuts(4);
+
   return (
     <div className="max-w-xl mx-auto px-4 py-20 text-center">
       <div className="w-20 h-20 rounded-2xl bg-brand-orange-light flex items-center justify-center mx-auto mb-6 text-brand-orange">
@@ -30,20 +26,24 @@ export default function NotFound() {
         </Link>
       </div>
 
-      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-text-muted mb-4">
-        Or browse a category
-      </p>
-      <div className="flex flex-wrap justify-center gap-2">
-        {CATEGORIES.map((c) => (
-          <Link
-            key={c.slug}
-            href={`/category/${c.slug}`}
-            className="px-4 py-2 text-sm font-medium rounded-full bg-surface-dim text-text-secondary hover:bg-brand-orange-light hover:text-brand-orange transition-colors"
-          >
-            {c.name}
-          </Link>
-        ))}
-      </div>
+      {categories.length > 0 && (
+        <>
+          <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-text-muted mb-4">
+            Or browse a category
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {categories.map((c) => (
+              <Link
+                key={c.slug}
+                href={`/category/${c.slug}`}
+                className="px-4 py-2 text-sm font-medium rounded-full bg-surface-dim text-text-secondary hover:bg-brand-orange-light hover:text-brand-orange transition-colors"
+              >
+                {c.name}
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -6,6 +6,9 @@ import {
     generateOrderNumber,
     generateWhatsAppUrl,
     cn,
+    getSafeImageSrc,
+    hasValidImage,
+    productImageUrl,
 } from "./utils";
 
 // ─────────────────────────────────────────────────────────────
@@ -142,6 +145,51 @@ describe("generateWhatsAppUrl", () => {
         const url = generateWhatsAppUrl("9350529717", items, total);
         // Encoded spaces, rupee sign etc should be in the query string
         expect(url).not.toContain(" "); // no raw spaces in a URL
+    });
+});
+
+// ─────────────────────────────────────────────────────────────
+// getSafeImageSrc / hasValidImage
+// ─────────────────────────────────────────────────────────────
+describe("getSafeImageSrc", () => {
+    it("returns null for empty, whitespace, null, or undefined", () => {
+        expect(getSafeImageSrc("")).toBeNull();
+        expect(getSafeImageSrc("   ")).toBeNull();
+        expect(getSafeImageSrc(null)).toBeNull();
+        expect(getSafeImageSrc(undefined)).toBeNull();
+    });
+
+    it("returns trimmed relative and absolute urls", () => {
+        expect(getSafeImageSrc("  /uploads/a.webp  ")).toBe("/uploads/a.webp");
+        expect(getSafeImageSrc("https://cdn.example.com/a.webp")).toBe("https://cdn.example.com/a.webp");
+    });
+
+    it("rejects invalid protocols", () => {
+        expect(getSafeImageSrc("javascript:alert(1)")).toBeNull();
+        expect(getSafeImageSrc("data:image/png;base64,abc")).toBeNull();
+    });
+});
+
+describe("hasValidImage", () => {
+    it("mirrors getSafeImageSrc truthiness", () => {
+        expect(hasValidImage("")).toBe(false);
+        expect(hasValidImage("/uploads/a.webp")).toBe(true);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────
+// productImageUrl (alias)
+// ─────────────────────────────────────────────────────────────
+describe("productImageUrl", () => {
+    it("returns null for empty or whitespace-only urls", () => {
+        expect(productImageUrl("")).toBeNull();
+        expect(productImageUrl("   ")).toBeNull();
+        expect(productImageUrl(null)).toBeNull();
+        expect(productImageUrl(undefined)).toBeNull();
+    });
+
+    it("returns trimmed urls", () => {
+        expect(productImageUrl("  /uploads/a.webp  ")).toBe("/uploads/a.webp");
     });
 });
 

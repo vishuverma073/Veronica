@@ -15,7 +15,7 @@ export default function BottomNav() {
 
   return (
     <nav
-      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-brand-black border-t border-white/10 flex"
+      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-brand-black border-t border-white/10 flex overflow-x-auto"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {items.map((item) => {
@@ -26,7 +26,7 @@ export default function BottomNav() {
             key={item.href}
             href={item.href}
             className={cn(
-              "flex-1 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] text-[10px] font-medium transition-colors",
+              "flex-none min-w-[4.25rem] flex flex-col items-center justify-center gap-1 px-1 py-2 min-h-[56px] text-[10px] font-medium transition-colors",
               active ? "text-brand-orange" : "text-white/50",
             )}
           >

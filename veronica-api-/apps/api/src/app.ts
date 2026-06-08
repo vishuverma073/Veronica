@@ -44,9 +44,11 @@ export function createApp(deps: AppDeps) {
   // CORS: the storefront/admin run on a different origin (localhost:3000 in dev,
   // a real domain in prod) and auth uses credentialed requests (refresh cookie),
   // so we must reflect the caller's origin — a wildcard "*" is illegal with
-  // credentials. localhost/127.0.0.1 are reflected only OUTSIDE production; in
-  // production ONLY the comma-separated CORS_ORIGINS are accepted.
+  // credentials. localhost/127.0.0.1 and private LAN IPs are reflected only OUTSIDE
+  // production; in production ONLY the comma-separated CORS_ORIGINS are accepted.
   const isProd = process.env.NODE_ENV === "production";
+  const devOrigin =
+    /^https?:\/\/((localhost|127\.0\.0\.1)|(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}))(:\d+)?$/;
   const extraOrigins = (process.env.CORS_ORIGINS ?? "")
     .split(",")
     .map((o) => o.trim())
@@ -56,7 +58,7 @@ export function createApp(deps: AppDeps) {
     cors({
       origin: (origin) => {
         if (!origin) return origin; // non-browser caller (curl, server-to-server)
-        if (!isProd && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+        if (!isProd && devOrigin.test(origin)) return origin;
         return extraOrigins.includes(origin) ? origin : null;
       },
       credentials: true,

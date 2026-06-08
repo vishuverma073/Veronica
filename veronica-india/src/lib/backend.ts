@@ -1,6 +1,11 @@
 import { z } from "zod";
-import { API_BASE, USE_MOCKS } from "@/lib/api-config";
+import { getApiBase, USE_MOCKS } from "@/lib/api-config";
+import { logApiFetch } from "@/lib/api-debug";
 import { mocksReady } from "@/lib/mocks-ready";
+import { resolveNavbarRoots } from "@/lib/navbar-categories";
+import { buildHeaderNavTree } from "@/lib/category-tree";
+import { buildShopNavTree } from "@/lib/shop-nav";
+import { logShopNav } from "@/lib/shop-nav-debug";
 import {
   CategoryListSchema,
   CategoryWithBreadcrumbSchema,
@@ -35,6 +40,11 @@ import { useAuthStore, getAccessToken } from "@/store/authStore";
 
 const ProductPageSchema = paginated(ProductListItemSchema);
 export type ProductPage = z.infer<typeof ProductPageSchema>;
+
+const CategoryProductPageSchema = ProductPageSchema.extend({
+  total: z.number().int().nonnegative().optional(),
+});
+export type CategoryProductPage = z.infer<typeof CategoryProductPageSchema>;
 
 const VisitsSchema = z.object({ total: z.number() });
 
@@ -73,9 +83,18 @@ export interface HomeBanner {
   ctaText: string;
   ctaLink: string;
 }
-/** A top-level header category with its dropdown subcategories. */
+/** A header category with nested dropdown children (any depth). */
 export interface NavCategory extends Category {
-  children: Category[];
+  children: NavCategory[];
+}
+
+/** Shop mega menu payload — full tree + featured ids from home composer. */
+export interface ShopNavData {
+  tree: NavCategory[];
+  featuredIds: number[];
+  flatCount: number;
+  usedFallback: boolean;
+  fetchWarning?: string;
 }
 
 export interface StoreHome {
@@ -87,7 +106,15 @@ export interface StoreHome {
   categories: number[];
 }
 
-const homeStr = (c: Record<string, unknown>, k: string) => (typeof c[k] === "string" ? (c[k] as string) : "");
+const homeStr = (c: Record<string, unknown>, k: string) =>
+  typeof c[k] === "string" ? (c[k] as string) : "";
+const homeImage = (c: Record<string, unknown>, k: string) => {
+  const raw = typeof c[k] === "string" ? (c[k] as string) : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("/") || /^https?:\/\//i.test(trimmed)) return trimmed;
+  return "";
+};
 const homeIds = (c: Record<string, unknown>, k: string) =>
   Array.isArray(c[k]) ? (c[k] as unknown[]).filter((n): n is number => typeof n === "number") : [];
 
@@ -131,20 +158,31 @@ async function apiFetch<T>(path: string, opts: FetchOptions): Promise<T> {
   // and when mocks are off). Prevents on-mount client fetches from escaping.
   if (USE_MOCKS) await mocksReady;
 
-  const url = `${API_BASE}${path}`;
+  const url = `${getApiBase()}${path}`;
+  logApiFetch("start", { method: "GET", url });
   const init: RequestInit & { next?: { revalidate?: number; tags?: string[] } } = {};
   if (opts.cache) init.cache = opts.cache;
   else if (opts.next) init.next = opts.next;
   const res = await fetch(url, init);
 
   if (!res.ok) {
+    logApiFetch("http_error", { url, status: res.status, statusText: res.statusText });
     throw new Error(
       `Backend request failed: GET ${url} → ${res.status} ${res.statusText}`,
     );
   }
 
   const body = await res.json();
-  return opts.schema.parse(body) as T;
+  logApiFetch("response", { url, status: res.status });
+  try {
+    return opts.schema.parse(body) as T;
+  } catch (err) {
+    logApiFetch("parse_error", {
+      url,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 function buildProductQuery(params: ListProductsParams): string {
@@ -180,7 +218,7 @@ function clearMarker() {
 
 async function postJson<T>(path: string, body: unknown, schema?: z.ZodType<T>): Promise<T> {
   if (USE_MOCKS) await mocksReady;
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -249,7 +287,7 @@ async function authedFetch<T>(
     const token = getAccessToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return fetch(`${API_BASE}${path}`, {
+    return fetch(`${getApiBase()}${path}`, {
       method,
       headers,
       credentials: "include",
@@ -430,36 +468,90 @@ export const backend = {
    * — categories should display A→Z everywhere they're shown (nav, footer,
    * homepage, sidebar). Sorting here keeps that consistent for every consumer.
    */
-  getCategories(): Promise<Category[]> {
+  getCategories(opts?: { fresh?: boolean }): Promise<Category[]> {
     return apiFetch<Category[]>("/categories", {
       schema: CategoryListSchema,
-      next: { revalidate: 3600, tags: ["categories"] },
+      ...(opts?.fresh || typeof window !== "undefined"
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: 3600, tags: ["categories"] } }),
     }).then((cats) =>
       [...cats].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
     );
   },
 
+  /** Every active category (flat). Used to build nested nav trees without N+1 fetches. */
+  getAllCategories(opts?: { fresh?: boolean }): Promise<Category[]> {
+    return apiFetch<Category[]>("/categories/all", {
+      schema: CategoryListSchema,
+      ...(opts?.fresh || typeof window !== "undefined"
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: 3600, tags: ["categories"] } }),
+    });
+  },
+
   /**
-   * The header navigation: each top-level category flagged "show in header",
-   * with its "show in header" subcategories nested for a dropdown menu. Built
-   * from the existing public endpoints (roots + per-category children) so no new
-   * API surface is needed — works identically against mocks and the real API.
-   * Ordered by `sortOrder` then name at both levels.
+   * Store header nav: root buttons come from the home composer's category
+   * showcase. Dropdown items are nested recursively via showInHeader flags.
+   * @deprecated Prefer getShopNav() for the Shop mega menu.
    */
   async getNavbar(): Promise<NavCategory[]> {
-    const roots = await backend.getCategories();
-    const navRoots = roots
-      .filter((c) => c.showInHeader)
-      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-    return Promise.all(
-      navRoots.map(async (root) => {
-        const detail = await backend.getCategoryBySlug(root.slug).catch(() => null);
-        const children = (detail?.children ?? [])
-          .filter((c) => c.showInHeader)
-          .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-        return { ...root, children };
-      }),
+    const [allCategories, home] = await Promise.all([
+      backend.getAllCategories({ fresh: true }),
+      backend.getHome().catch(() => null),
+    ]);
+    const roots = resolveNavbarRoots(
+      allCategories.filter((c) => c.parentId === null),
+      home?.categories ?? [],
     );
+    return buildHeaderNavTree(allCategories, roots.map((r) => r.id));
+  },
+
+  /**
+   * Shop mega menu: full category tree (unlimited depth) plus home-composer
+   * featured category ids. New admin categories appear automatically.
+   * Falls back to root-only `/categories` if `/categories/all` fails.
+   */
+  async getShopNav(): Promise<ShopNavData> {
+    let flat: Category[] = [];
+    let usedFallback = false;
+    let fetchWarning: string | undefined;
+
+    try {
+      flat = await backend.getAllCategories({ fresh: true });
+      logShopNav("GET /categories/all ok", { count: flat.length });
+    } catch (err) {
+      logShopNav("GET /categories/all failed", err);
+      fetchWarning = err instanceof Error ? err.message : "Failed to load full category list";
+      try {
+        flat = await backend.getCategories({ fresh: true });
+        usedFallback = true;
+        logShopNav("GET /categories fallback ok", { count: flat.length });
+      } catch (fallbackErr) {
+        logShopNav("GET /categories fallback failed", fallbackErr);
+        throw fallbackErr;
+      }
+    }
+
+    const home = await backend.getHome().catch((err) => {
+      logShopNav("GET /home failed (non-fatal)", err);
+      return null;
+    });
+
+    const tree = buildShopNavTree(flat);
+    logShopNav("tree built", {
+      flat: flat.length,
+      roots: tree.length,
+      nested: flat.length - tree.length,
+      usedFallback,
+    });
+
+    return {
+      tree,
+      featuredIds: home?.categories ?? [],
+      flatCount: flat.length,
+      usedFallback,
+      fetchWarning,
+    };
   },
 
   /** Admin-composed storefront home config (enabled sections, in order).
@@ -479,14 +571,14 @@ export const backend = {
       return {
         order: wire.sections.map((s) => s.key),
         hero: {
-          image: homeStr(hero, "imageUrl"),
+          image: homeImage(hero, "imageUrl"),
           title: homeStr(hero, "title"),
           subtitle: homeStr(hero, "subtitle"),
           ctaText: homeStr(hero, "ctaText"),
           ctaLink: homeStr(hero, "ctaHref"),
         },
         promo: {
-          image: homeStr(promo, "imageUrl"),
+          image: homeImage(promo, "imageUrl"),
           title: homeStr(promo, "headline"),
           subtitle: "",
           ctaText: homeStr(promo, "ctaText"),
@@ -499,10 +591,12 @@ export const backend = {
   },
 
   /** A category enriched with its direct children + breadcrumb trail. */
-  getCategoryBySlug(slug: string): Promise<CategoryWithBreadcrumb> {
+  getCategoryBySlug(slug: string, opts?: { fresh?: boolean }): Promise<CategoryWithBreadcrumb> {
     return apiFetch<CategoryWithBreadcrumb>(`/categories/${slug}`, {
       schema: CategoryWithBreadcrumbSchema,
-      next: { revalidate: 3600, tags: ["categories", `category-${slug}`] },
+      ...(opts?.fresh || typeof window !== "undefined"
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: 3600, tags: ["categories", `category-${slug}`] } }),
     });
   },
 
@@ -528,15 +622,27 @@ export const backend = {
     });
   },
 
+  /** Products within a category subtree (recursive), cursor-paginated. */
+  listProductsByCategory(
+    slug: string,
+    params: { limit?: number; cursor?: number | null } = {},
+  ): Promise<CategoryProductPage> {
+    const q = new URLSearchParams();
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.cursor != null) q.set("cursor", String(params.cursor));
+    const qs = q.toString();
+    return apiFetch<CategoryProductPage>(
+      `/products/by-category/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`,
+      {
+        schema: CategoryProductPageSchema,
+        next: { revalidate: 600, tags: ["products", `category-products-${slug}`] },
+      },
+    );
+  },
+
   /** Products within a category subtree (recursive). */
   getProductsByCategory(slug: string, limit = 24): Promise<ProductListItem[]> {
-    // Use the dedicated recursive subtree endpoint. The public /products?category=
-    // filter is DIRECT-category only, so parent categories (whose products live in
-    // subcategories) return zero items. /products/by-category/:slug expands the tree.
-    return apiFetch<ProductPage>(`/products/by-category/${slug}`, {
-      schema: ProductPageSchema,
-      next: { revalidate: 600, tags: ["products", `category-products-${slug}`] },
-    }).then((r) => r.items.slice(0, limit));
+    return this.listProductsByCategory(slug, { limit }).then((r) => r.items);
   },
 
   /** Full product detail for the PDP. */
@@ -694,7 +800,7 @@ export const backend = {
   async getStoreSettings(): Promise<StoreSettings> {
     // no-store so admin changes to shipping/GST show up immediately (the API
     // sends a 1h cache header otherwise). Used by client components (cart/checkout).
-    const res = await fetch(`${API_BASE}/settings`, { cache: "no-store" });
+    const res = await fetch(`${getApiBase()}/settings`, { cache: "no-store" });
     if (!res.ok) throw new Error("settings_failed");
     return StoreSettingsSchema.parse(await res.json());
   },

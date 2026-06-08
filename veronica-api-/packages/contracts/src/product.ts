@@ -77,6 +77,8 @@ export const ProductListItemSchema = z.object({
   maxBasePrice: PriceSchema,
   /** Best discount across SKUs, as a whole-number percentage. */
   bestDiscount: z.number().int(),
+  /** Distinct size values (from Size / Overall Size variant axes) for category filters. */
+  sizes: z.array(z.string()).default([]),
 });
 export type ProductListItem = z.infer<typeof ProductListItemSchema>;
 

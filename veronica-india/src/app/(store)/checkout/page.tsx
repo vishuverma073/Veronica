@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
 import { Loader2, ChevronLeft, MapPin } from "lucide-react";
+import StoreProductThumb from "@/components/store/StoreProductThumb";
 import { toast } from "sonner";
 import { backend } from "@/lib/backend";
 import { useAuthStore } from "@/store/authStore";
@@ -17,6 +17,9 @@ import AddressList from "@/components/checkout/AddressList";
 import AddressForm from "@/components/checkout/AddressForm";
 import CheckoutSummary from "@/components/checkout/CheckoutSummary";
 import PayButton from "@/components/checkout/PayButton";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
+import { validateCartStock, type CartStockIssue } from "@/lib/cart-stock";
+import { AlertCircle } from "lucide-react";
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -28,6 +31,9 @@ export default function CheckoutPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [mode, setMode] = useState<"list" | "form">("list");
   const [editing, setEditing] = useState<Address | undefined>(undefined);
+  const [deleteAddress, setDeleteAddress] = useState<Address | null>(null);
+  const [stockIssues, setStockIssues] = useState<CartStockIssue[]>([]);
+  const [checkingStock, setCheckingStock] = useState(true);
 
   // Redirect guests once auth resolves.
   useEffect(() => {
@@ -113,6 +119,36 @@ export default function CheckoutPage() {
     };
   }, [status, router]);
 
+  useEffect(() => {
+    if (status !== "authenticated" || items === null || items.length === 0) {
+      setStockIssues([]);
+      setCheckingStock(false);
+      return;
+    }
+    let active = true;
+    setCheckingStock(true);
+    const localItems = useCartStore.getState().items;
+    validateCartStock(localItems.length > 0 ? localItems : items.map((i, idx) => ({
+      id: i.skuId,
+      cartKey: `${i.skuId}-${i.variant ?? ""}`,
+      name: i.name,
+      slug: i.slug,
+      price: i.price,
+      image: i.image,
+      variant: i.variant,
+      qty: i.qty,
+    })))
+      .then((issues) => {
+        if (active) setStockIssues(issues);
+      })
+      .finally(() => {
+        if (active) setCheckingStock(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [status, items]);
+
   async function handleSaved(addr: Address) {
     const list = await loadAddresses();
     setSelectedId(list.find((a) => a.id === addr.id)?.id ?? addr.id);
@@ -121,16 +157,22 @@ export default function CheckoutPage() {
   }
 
   async function handleDelete(addr: Address) {
-    if (!confirm(`Delete the address for ${addr.fullName}?`)) return;
+    setDeleteAddress(addr);
+  }
+
+  async function performDeleteAddress() {
+    if (!deleteAddress) return;
     try {
-      await backend.removeAddress(addr.id);
+      await backend.removeAddress(deleteAddress.id);
       const list = await loadAddresses();
-      if (selectedId === addr.id) {
+      if (selectedId === deleteAddress.id) {
         setSelectedId(list.find((a) => a.isDefault)?.id ?? list[0]?.id ?? null);
       }
       toast.success("Address removed");
     } catch {
       toast.error("Couldn’t delete the address");
+    } finally {
+      setDeleteAddress(null);
     }
   }
 
@@ -204,7 +246,13 @@ export default function CheckoutPage() {
               {items.map((item) => (
                 <div key={item.id} className="flex gap-3 p-3.5">
                   <div className="w-16 h-16 bg-surface-dim rounded-xl overflow-hidden shrink-0 border border-border-light">
-                    <Image src={item.image} alt={item.name} width={64} height={64} className="object-contain w-full h-full p-1.5" />
+                    <StoreProductThumb
+                      src={item.image}
+                      alt={item.name}
+                      width={64}
+                      height={64}
+                      className="object-contain w-full h-full p-1.5"
+                    />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-text-primary line-clamp-2">{item.name}</p>
@@ -225,8 +273,32 @@ export default function CheckoutPage() {
           <div className="bg-surface-card rounded-2xl border border-border-light p-5 lg:sticky lg:top-24">
             <h2 className="text-base font-bold text-text-primary mb-4 tracking-tight">Order Summary</h2>
             <CheckoutSummary totals={totals} settings={settings} />
+            {stockIssues.length > 0 && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold flex items-center gap-2 mb-2">
+                  <AlertCircle size={16} /> Stock issue
+                </p>
+                <ul className="space-y-1 text-xs">
+                  {stockIssues.map((issue) => (
+                    <li key={issue.cartKey}>
+                      {issue.name}:{" "}
+                      {issue.reason === "out_of_stock"
+                        ? "out of stock"
+                        : `only ${issue.available} available (you have ${issue.requested})`}
+                    </li>
+                  ))}
+                </ul>
+                <Link href="/cart" className="inline-block mt-2 text-xs font-semibold text-brand-orange hover:underline">
+                  Update cart
+                </Link>
+              </div>
+            )}
             <div className="mt-5">
-              <PayButton addressId={mode === "list" ? selectedId : null} amount={totals.total} />
+              <PayButton
+                addressId={mode === "list" ? selectedId : null}
+                amount={totals.total}
+                disabled={checkingStock || stockIssues.length > 0}
+              />
               {mode === "list" && !selectedId && (
                 <p className="text-[11px] text-text-muted text-center mt-2">Select an address to continue.</p>
               )}
@@ -234,6 +306,20 @@ export default function CheckoutPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={deleteAddress != null}
+        title="Delete address?"
+        message={
+          deleteAddress
+            ? `Remove the address for ${deleteAddress.fullName}?`
+            : ""
+        }
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setDeleteAddress(null)}
+        onConfirm={() => void performDeleteAddress()}
+      />
     </div>
   );
 }

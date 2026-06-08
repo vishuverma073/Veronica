@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { and, desc, eq, gte, lt, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte } from "drizzle-orm";
 import type { DbClient } from "../../db/client.js";
-import { auditLog } from "../../db/schema.js";
+import { auditLog, users } from "../../db/schema.js";
 import { makeRequireAdmin } from "../../middleware/auth.js";
 import type { AppEnv } from "../../lib/types.js";
 
@@ -32,9 +32,23 @@ export function makeAdminAuditRouter(db: DbClient) {
       .limit(LIMIT + 1);
 
     const hasMore = rows.length > LIMIT;
-    const items = rows.slice(0, LIMIT).map((r) => ({
+    const pageRows = rows.slice(0, LIMIT);
+    const actorIds = [
+      ...new Set(pageRows.map((r) => r.actorUserId).filter((id): id is string => id != null)),
+    ];
+    const actorEmails =
+      actorIds.length > 0
+        ? await db
+            .select({ id: users.id, email: users.email })
+            .from(users)
+            .where(inArray(users.id, actorIds))
+        : [];
+    const emailById = new Map(actorEmails.map((u) => [u.id, u.email]));
+
+    const items = pageRows.map((r) => ({
       id: Number(r.id),
       actorUserId: r.actorUserId,
+      actorEmail: r.actorUserId ? (emailById.get(r.actorUserId) ?? null) : null,
       action: r.action,
       resourceType: r.resourceType,
       resourceId: r.resourceId,

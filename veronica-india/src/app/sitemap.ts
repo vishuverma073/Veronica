@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/site";
 import { backend } from "@/lib/backend";
-import type { Category, ProductListItem } from "@veronica/contracts";
+import type { ProductListItem } from "@veronica/contracts";
+import { collectActiveCategorySlugs } from "@/lib/category-tree";
 
 /**
  * Sitemap = static pages + every category (roots + children) + every active
@@ -19,22 +20,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE_URL}/search`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
     { url: `${SITE_URL}/privacy`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
     { url: `${SITE_URL}/refund`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${SITE_URL}/terms`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${SITE_URL}/shipping`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${SITE_URL}/faq`, lastModified: now, changeFrequency: "monthly", priority: 0.4 },
   ];
 
   const categoryEntries: MetadataRoute.Sitemap = [];
   const productEntries: MetadataRoute.Sitemap = [];
 
   try {
-    // Categories: roots + their children (the public API exposes children via
-    // the per-slug detail endpoint).
-    const roots = await backend.getCategories();
-    const slugs = new Set<string>();
-    for (const root of roots) {
-      slugs.add(root.slug);
-      const detail = await backend.getCategoryBySlug(root.slug).catch(() => null);
-      detail?.children?.forEach((c: Category) => slugs.add(c.slug));
-    }
-    for (const slug of slugs) {
+    const allCategories = await backend.getAllCategories();
+    for (const slug of collectActiveCategorySlugs(allCategories)) {
       categoryEntries.push({
         url: `${SITE_URL}/category/${slug}`,
         lastModified: now,

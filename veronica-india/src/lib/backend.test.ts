@@ -44,14 +44,18 @@ describe("backend categories", () => {
 
   it("builds the navbar: header roots with their header subcategories nested", async () => {
     const nav = await backend.getNavbar();
-    // Only top-level (root) categories appear at the top level.
     expect(nav.length).toBeGreaterThanOrEqual(1);
-    expect(nav.every((c) => c.parentId === null && c.showInHeader)).toBe(true);
-    // Kitchen Sinks is a header root and has header subcategories → a dropdown.
+    expect(nav.every((c) => c.parentId === null)).toBe(true);
     const kitchen = nav.find((c) => c.slug === "kitchen-sinks");
     expect(kitchen).toBeTruthy();
     expect(kitchen!.children.length).toBeGreaterThan(0);
     expect(kitchen!.children.every((c) => c.showInHeader && c.parentId === kitchen!.id)).toBe(true);
+  });
+
+  it("orders header roots to match the home category showcase", async () => {
+    const [home, nav] = await Promise.all([backend.getHome(), backend.getNavbar()]);
+    expect(home.categories.length).toBeGreaterThan(0);
+    expect(nav.map((c) => c.id)).toEqual(home.categories);
   });
 });
 
@@ -77,6 +81,14 @@ describe("backend products", () => {
 
     const sinks = await backend.getProductsByCategory("kitchen-sinks");
     expect(sinks.length).toBeGreaterThan(0);
+  });
+
+  it("includes sizes on category product lists for filtering", async () => {
+    const items = await backend.getProductsByCategory("single-bowl");
+    expect(items.length).toBeGreaterThan(0);
+    const withSizes = items.filter((p) => p.sizes.length > 0);
+    expect(withSizes.length).toBeGreaterThan(0);
+    expect(withSizes[0].sizes).toContain("18×16");
   });
 
   it("searches by free text", async () => {

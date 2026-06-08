@@ -3,21 +3,11 @@
 import { useState } from "react";
 import ProductCard from "./ProductCard";
 import { ArrowUpDown } from "lucide-react";
-
-interface ProductItem {
-    slug: string;
-    name: string;
-    image: string;
-    minPrice: number;
-    maxBasePrice: number;
-    discount: number;
-    isBestseller: boolean;
-    isNew: boolean;
-}
+import type { CategoryListingProduct } from "./CategoryProductListing";
 
 type SortOption = "default" | "price-asc" | "price-desc" | "discount" | "newest";
 
-export default function CategoryProductGrid({ products }: { products: ProductItem[] }) {
+export default function CategoryProductGrid({ products }: { products: CategoryListingProduct[] }) {
     const [sort, setSort] = useState<SortOption>("default");
 
     const sorted = [...products].sort((a, b) => {
@@ -40,7 +30,7 @@ export default function CategoryProductGrid({ products }: { products: ProductIte
             {/* Sort bar */}
             <div className="flex items-center justify-between mb-4">
                 <span className="text-xs font-semibold text-text-muted bg-surface-dim px-3 py-1.5 rounded-full">
-                    {products.length} products
+                    {products.length} product{products.length !== 1 ? "s" : ""}
                 </span>
                 <div className="relative">
                     <ArrowUpDown size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />

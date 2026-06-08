@@ -131,6 +131,14 @@ export const categories: Category[] = [
         image: "/uploads/products/faucet-1.png",
         sortOrder: 1,
     },
+
+    // ─── Third-level examples ───
+    { id: 100, name: "18×16", slug: "18x16", parentId: 10, description: "Compact single bowl", sortOrder: 0 },
+    { id: 101, name: "24×20", slug: "24x20", parentId: 10, description: "Medium single bowl", sortOrder: 1 },
+    { id: 102, name: "32×20", slug: "32x20", parentId: 10, description: "Large single bowl", sortOrder: 2 },
+    { id: 200, name: "Long Body", slug: "long-body", parentId: 20, description: "Long body ABS faucets", sortOrder: 0 },
+    { id: 201, name: "Short Body", slug: "short-body", parentId: 20, description: "Short body ABS faucets", sortOrder: 1 },
+    { id: 202, name: "Heavy", slug: "heavy", parentId: 20, description: "Heavy ABS faucets", sortOrder: 2 },
 ];
 
 // ─── Sample Data: Products ───────────────────────────────────

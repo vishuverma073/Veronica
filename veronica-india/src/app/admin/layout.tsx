@@ -13,11 +13,12 @@ import AdminShell from "@/components/admin/AdminShell";
  */
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isLogin = pathname === "/admin/login";
+  const isBareRoute =
+    pathname === "/admin/login" || pathname === "/admin/welcome";
 
   return (
     <AdminAuthProvider>
-      {isLogin ? children : <AdminShell>{children}</AdminShell>}
+      {isBareRoute ? children : <AdminShell>{children}</AdminShell>}
       <Toaster position="top-center" richColors closeButton />
     </AdminAuthProvider>
   );

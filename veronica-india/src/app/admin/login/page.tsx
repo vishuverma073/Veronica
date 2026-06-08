@@ -3,11 +3,12 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adminApi, AdminApiError } from "@/lib/admin-api";
+import { safeAdminReturnTo } from "@/lib/admin-welcome";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const returnTo = searchParams.get("returnTo") || "/admin";
+  const returnTo = safeAdminReturnTo(searchParams.get("returnTo"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,11 +20,9 @@ function LoginForm() {
     setLoading(true);
     setError("");
     try {
-      const { admin } = await adminApi.login(email, password);
-      // Stash the name for the one-time welcome splash on the admin panel.
-      const display = admin.name?.trim() || admin.email.split("@")[0] || "Admin";
-      sessionStorage.setItem("veronica-admin-welcome", display);
-      router.replace(returnTo);
+      await adminApi.login(email, password);
+      const destination = encodeURIComponent(returnTo);
+      router.replace(`/admin/welcome?returnTo=${destination}`);
     } catch (err) {
       if (err instanceof AdminApiError && err.status === 401) {
         setError("Invalid email or password.");

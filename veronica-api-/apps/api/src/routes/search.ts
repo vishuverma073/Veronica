@@ -35,8 +35,12 @@ export function makeSearchRouter(db: DbClient) {
     const rows = await db.query.products.findMany({
       where: inArray(products.id, ids),
       with: {
-        skus: { columns: { price: true, salePrice: true } },
+        skus: { columns: { price: true, salePrice: true, dimensionValues: true } },
         images: { columns: { url: true, sortOrder: true } },
+        dimensions: {
+          columns: { name: true, sortOrder: true },
+          with: { values: { columns: { value: true, sortOrder: true } } },
+        },
       },
     });
 
@@ -45,7 +49,7 @@ export function makeSearchRouter(db: DbClient) {
     const items = ids
       .map((id) => byId.get(id))
       .filter((p): p is NonNullable<typeof p> => Boolean(p))
-      .map((p) => toListItem(p, p.skus, p.images));
+      .map((p) => toListItem(p, p.skus, p.images, p.dimensions));
 
     return c.json(ResponseSchema.parse({ items, nextCursor: null }));
   });

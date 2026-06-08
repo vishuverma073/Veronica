@@ -6,6 +6,9 @@ import { Redis } from "@upstash/redis";
  * Uses Upstash Redis when configured; otherwise an in-process Map with TTL —
  * fine for a single instance (mirrors lib/ratelimit.ts and lib/idempotency.ts).
  * Negative results (null/undefined) are never cached, so a 404 can't get pinned.
+ *
+ * Redis is best-effort: if Upstash is unreachable the loader still runs and the
+ * response is served from Postgres (with in-memory fallback caching).
  */
 
 // ─── in-memory fallback ───
@@ -26,6 +29,21 @@ export interface CacheResult<T> {
   hit: boolean;
 }
 
+async function memCached<T>(
+  key: string,
+  ttlSeconds: number,
+  loader: () => Promise<T>,
+): Promise<CacheResult<T>> {
+  const now = Date.now();
+  const entry = memStore.get(key);
+  if (entry && entry.expiresAt > now) return { value: entry.value as T, hit: true };
+  const fresh = await loader();
+  if (fresh !== null && fresh !== undefined) {
+    memStore.set(key, { value: fresh, expiresAt: now + ttlSeconds * 1000 });
+  }
+  return { value: fresh, hit: false };
+}
+
 /**
  * Read `key` from cache, or run `loader` and store its result for `ttlSeconds`.
  * `hit` tells the caller whether it came from cache (for the x-cache header).
@@ -37,21 +55,24 @@ export async function cached<T>(
 ): Promise<CacheResult<T>> {
   const redis = getUpstash();
   if (redis) {
-    const existing = await redis.get<T>(key);
-    if (existing !== null && existing !== undefined) return { value: existing, hit: true };
-    const fresh = await loader();
-    if (fresh !== null && fresh !== undefined) await redis.set(key, fresh, { ex: ttlSeconds });
-    return { value: fresh, hit: false };
+    try {
+      const existing = await redis.get<T>(key);
+      if (existing !== null && existing !== undefined) return { value: existing, hit: true };
+      const fresh = await loader();
+      if (fresh !== null && fresh !== undefined) {
+        try {
+          await redis.set(key, fresh, { ex: ttlSeconds });
+        } catch {
+          /* best-effort write — response already loaded from DB */
+        }
+      }
+      return { value: fresh, hit: false };
+    } catch {
+      /* Redis down or slow — never fail the request; fall back to mem + loader */
+    }
   }
 
-  const now = Date.now();
-  const entry = memStore.get(key);
-  if (entry && entry.expiresAt > now) return { value: entry.value as T, hit: true };
-  const fresh = await loader();
-  if (fresh !== null && fresh !== undefined) {
-    memStore.set(key, { value: fresh, expiresAt: now + ttlSeconds * 1000 });
-  }
-  return { value: fresh, hit: false };
+  return memCached(key, ttlSeconds, loader);
 }
 
 /** Delete exact keys. */
@@ -59,8 +80,11 @@ export async function invalidate(...keys: string[]): Promise<void> {
   if (keys.length === 0) return;
   const redis = getUpstash();
   if (redis) {
-    await redis.del(...keys);
-    return;
+    try {
+      await redis.del(...keys);
+    } catch {
+      /* cache invalidation must not block admin writes */
+    }
   }
   for (const k of keys) memStore.delete(k);
 }
@@ -69,13 +93,16 @@ export async function invalidate(...keys: string[]): Promise<void> {
 export async function invalidatePrefix(prefix: string): Promise<void> {
   const redis = getUpstash();
   if (redis) {
-    let cursor = "0";
-    do {
-      const [next, keys] = await redis.scan(cursor, { match: `${prefix}*`, count: 100 });
-      cursor = String(next);
-      if (keys.length) await redis.del(...keys);
-    } while (cursor !== "0");
-    return;
+    try {
+      let cursor = "0";
+      do {
+        const [next, keys] = await redis.scan(cursor, { match: `${prefix}*`, count: 100 });
+        cursor = String(next);
+        if (keys.length) await redis.del(...keys);
+      } while (cursor !== "0");
+    } catch {
+      /* fall through to mem scan */
+    }
   }
   for (const k of [...memStore.keys()]) {
     if (k.startsWith(prefix)) memStore.delete(k);

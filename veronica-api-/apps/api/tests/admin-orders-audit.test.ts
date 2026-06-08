@@ -32,16 +32,20 @@ const auditRows = [
 
 function adminDb(): DbClient {
   const adminRow = { id: ADMIN_ID, email: "a@b.com", name: "A", isAdmin: true };
+  const actorLookup = Promise.resolve([adminRow]);
   return {
     select: () => ({
       from: () => ({
-        where: () => ({
-          limit: async () => [adminRow], // requireAdmin lookup
-          orderBy: () => ({ limit: async () => auditRows }), // audit query
-        }),
+        where: () =>
+          Object.assign(actorLookup, {
+            orderBy: () => ({
+              limit: async () => auditRows,
+            }),
+            limit: async () => [adminRow],
+          }),
       }),
     }),
-    query: { orders: { findMany: async () => [] } }, // order-list query (no orders here)
+    query: { orders: { findMany: async () => [] } },
   } as unknown as DbClient;
 }
 
@@ -71,6 +75,7 @@ describe("GET /admin/audit-log", () => {
     const body = (await res.json()) as { items: { action: string }[]; nextCursor: string | null };
     expect(body.items).toHaveLength(2);
     expect(body.items[0]!.action).toBe("product.create");
+    expect(body.items[0]!.actorEmail).toBe("a@b.com");
     expect(body.nextCursor).toBeNull();
   });
 

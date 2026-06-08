@@ -31,7 +31,7 @@
 
   /* Announcement-bar ticker. Registering it here makes `animate-marquee` a real
      Tailwind v4 utility (otherwise the class resolves to an empty animation). */
-  --animate-marquee: marquee 40s linear infinite;
+  --animate-marquee: marquee 55s linear infinite;
 }
 
 /* ─── Dark mode ─────────────────────────────────────────────────
@@ -869,6 +869,165 @@ body {
 .admin-nav-item.active {
   color: white;
   background-color: var(--color-brand-orange);
+}
+
+/* ─── Admin welcome transition (post-login splash) ──────────── */
+.admin-welcome-screen {
+  animation: adminWelcomeFadeIn 0.55s ease-out forwards;
+}
+
+.admin-welcome-screen--exit {
+  animation: adminWelcomeFadeOut 0.45s ease-in forwards;
+}
+
+.admin-welcome-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(232, 130, 42, 0.12), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(232, 130, 42, 0.06), transparent 50%),
+    linear-gradient(180deg, #0a0a0a 0%, #111111 50%, #0a0a0a 100%);
+}
+
+.admin-welcome-glow {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(232, 130, 42, 0.15) 0%, transparent 70%);
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+.admin-welcome-glow--left {
+  top: 15%;
+  left: -8%;
+  animation: adminWelcomeGlowDrift 8s ease-in-out infinite;
+}
+
+.admin-welcome-glow--right {
+  bottom: 10%;
+  right: -10%;
+  animation: adminWelcomeGlowDrift 8s ease-in-out infinite reverse;
+}
+
+.admin-welcome-logo-wrap {
+  animation: adminWelcomeLogoIn 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+}
+
+.admin-welcome-logo {
+  animation: adminWelcomeLogoGlow 3s ease-in-out infinite;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.admin-welcome-content--enter .admin-welcome-heading,
+.admin-welcome-content--hold .admin-welcome-heading {
+  animation: adminWelcomeTextUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.35s both;
+}
+
+.admin-welcome-content--enter .admin-welcome-eyebrow,
+.admin-welcome-content--hold .admin-welcome-eyebrow {
+  animation: adminWelcomeTextUp 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.25s both;
+}
+
+.admin-welcome-status {
+  animation: adminWelcomeStatusIn 0.5s ease-out both;
+}
+
+.admin-welcome-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--color-brand-orange);
+  border-radius: 50%;
+  animation: adminWelcomeSpin 0.85s linear infinite;
+}
+
+.admin-welcome-progress-bar {
+  width: 35%;
+  animation: adminWelcomeProgress 2.4s ease-in-out infinite;
+}
+
+.admin-welcome-content--exit {
+  animation: adminWelcomeContentOut 0.45s ease-in forwards;
+}
+
+@keyframes adminWelcomeFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes adminWelcomeFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes adminWelcomeLogoIn {
+  from {
+    opacity: 0;
+    transform: scale(0.82) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes adminWelcomeLogoGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 18px rgba(232, 130, 42, 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 28px rgba(232, 130, 42, 0.55));
+  }
+}
+
+@keyframes adminWelcomeTextUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes adminWelcomeStatusIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes adminWelcomeGlowDrift {
+  0%, 100% { transform: translate(0, 0); opacity: 0.6; }
+  50% { transform: translate(12px, -8px); opacity: 1; }
+}
+
+@keyframes adminWelcomeSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes adminWelcomeProgress {
+  0% { transform: translateX(-120%); }
+  50% { transform: translateX(180%); }
+  100% { transform: translateX(-120%); }
+}
+
+@keyframes adminWelcomeContentOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
 }
 
 /* ─── Form Inputs ───────────────────────────────────────────── */

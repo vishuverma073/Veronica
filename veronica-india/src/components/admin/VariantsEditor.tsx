@@ -2,15 +2,18 @@
 
 import { Plus, Trash2, X, Tag } from "lucide-react";
 import { useState } from "react";
-import type { VariantDimension, ProductSKU } from "@veronica/contracts";
-import { syncSkus, tempId } from "@/lib/sku-matrix";
+import type { VariantDimension } from "@veronica/contracts";
+import { syncSkus, tempId, type EditableSku } from "@/lib/sku-matrix";
 import { formatPrice } from "@/lib/utils";
+
+/** SKU row in the admin editor — price is null until the user enters one (0 is valid). */
+export type { EditableSku };
 
 interface VariantsEditorProps {
   dimensions: VariantDimension[];
-  skus: ProductSKU[];
+  skus: EditableSku[];
   codePrefix: string;
-  onChange: (dimensions: VariantDimension[], skus: ProductSKU[]) => void;
+  onChange: (dimensions: VariantDimension[], skus: EditableSku[]) => void;
 }
 
 export default function VariantsEditor({
@@ -23,7 +26,7 @@ export default function VariantsEditor({
   const hasVariants = dimensions.length > 0;
 
   /** Apply a dimension change and re-sync the SKU matrix. */
-  function commit(nextDims: VariantDimension[], nextSkus?: ProductSKU[]) {
+  function commit(nextDims: VariantDimension[], nextSkus?: EditableSku[]) {
     const synced = syncSkus(nextDims, nextSkus ?? skus, codePrefix);
     onChange(nextDims, synced);
   }
@@ -86,7 +89,7 @@ export default function VariantsEditor({
     );
   }
 
-  function updateSku(id: number, patch: Partial<ProductSKU>) {
+  function updateSku(id: number, patch: Partial<EditableSku>) {
     onChange(
       dimensions,
       skus.map((s) => (s.id === id ? { ...s, ...patch } : s)),
@@ -163,13 +166,14 @@ export default function VariantsEditor({
 
       {/* SKU matrix */}
       <div className="overflow-x-auto -mx-1 px-1">
-        <table className="w-full text-sm border-collapse min-w-[420px]">
+        <table className="w-full text-sm border-collapse min-w-[480px]">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wide text-text-muted">
               <th className="py-2 pr-2 font-semibold">SKU</th>
               {hasVariants && <th className="py-2 px-2 font-semibold">Variant</th>}
               <th className="py-2 px-2 font-semibold">Price ₹</th>
               <th className="py-2 px-2 font-semibold">Sale ₹</th>
+              <th className="py-2 px-2 font-semibold">Stock</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-light">
@@ -193,8 +197,16 @@ export default function VariantsEditor({
                   <input
                     type="number"
                     min={0}
-                    value={sku.price}
-                    onChange={(e) => updateSku(sku.id, { price: Number(e.target.value) })}
+                    step="any"
+                    required
+                    value={sku.price ?? ""}
+                    placeholder="Required"
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      updateSku(sku.id, {
+                        price: raw === "" ? null : Number(raw),
+                      });
+                    }}
                     className="input py-1.5 text-xs w-24"
                   />
                 </td>
@@ -224,6 +236,22 @@ export default function VariantsEditor({
                     )}
                   </div>
                 </td>
+                <td className="py-2 px-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={sku.stock ?? ""}
+                    placeholder="—"
+                    onChange={(e) =>
+                      updateSku(sku.id, {
+                        stock: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                    className="input py-1.5 text-xs w-20"
+                    aria-label="Stock quantity"
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -237,8 +265,16 @@ export default function VariantsEditor({
 
       {skus.length > 0 && (
         <p className="text-[11px] text-text-muted">
-          {skus.length} SKU{skus.length !== 1 ? "s" : ""} · from{" "}
-          {formatPrice(Math.min(...skus.map((s) => s.salePrice ?? s.price)))}
+          {skus.length} SKU{skus.length !== 1 ? "s" : ""}
+          {skus.some((s) => s.price != null) && (
+            <>
+              {" "}
+              · from{" "}
+              {formatPrice(
+                Math.min(...skus.map((s) => s.salePrice ?? s.price).filter((p): p is number => p != null)),
+              )}
+            </>
+          )}
         </p>
       )}
     </div>

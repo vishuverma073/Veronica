@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { formatPrice } from "@/lib/utils";
+import { Package } from "lucide-react";
+import { formatPrice, productImageUrl } from "@/lib/utils";
 
 interface ProductCardProps {
     slug: string;
@@ -23,6 +24,8 @@ export default function ProductCard({
     isBestseller,
     isNew,
 }: ProductCardProps) {
+    const imageUrl = productImageUrl(image);
+
     return (
         <Link href={`/product/${slug}`} className="card group block">
             {/* Image Container — fixed aspect ratio for uniform cards. A soft
@@ -34,13 +37,19 @@ export default function ProductCard({
                 className="relative aspect-[4/3] overflow-hidden"
                 style={{ backgroundColor: "#f4f4f5" }}
             >
-                <Image
-                    src={image}
-                    alt={name}
-                    fill
-                    className="object-contain p-6 transition-transform duration-500 ease-out group-hover:scale-108"
-                    sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                />
+                {imageUrl ? (
+                    <Image
+                        src={imageUrl}
+                        alt={name}
+                        fill
+                        className="object-contain p-6 transition-transform duration-500 ease-out group-hover:scale-108"
+                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                    />
+                ) : (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <Package size={40} className="text-text-muted" aria-hidden />
+                    </div>
+                )}
 
                 {/* Badges */}
                 <div className="absolute top-3 left-3 flex flex-col gap-1.5">

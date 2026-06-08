@@ -4,8 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, ShoppingCart } from "lucide-react";
+import { Loader2, Search, ShoppingCart } from "lucide-react";
 import { adminApi } from "@/lib/admin-api";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
 
 /** Status filter tabs (key = backend status, "" = all). */
 const FILTERS = [
@@ -57,8 +59,17 @@ function inr(n: number) {
 
 export default function OrdersPage() {
   const [filter, setFilter] = useState<string>("");
-  const { data: orders, isLoading, mutate } = useSWR(["admin/orders", filter], () =>
-    adminApi.listOrders(filter || undefined),
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const [statusConfirm, setStatusConfirm] = useState<{
+    id: string;
+    orderNumber: string;
+    from: string;
+    to: string;
+  } | null>(null);
+  const { data: orders, isLoading, mutate } = useSWR(
+    ["admin/orders", filter, debouncedSearch],
+    () => adminApi.listOrders(filter || undefined, debouncedSearch || undefined),
   );
 
   async function setStatus(id: string, status: string) {
@@ -74,16 +85,31 @@ export default function OrdersPage() {
   // Confirm before any status change (override mode: cancelled → shipped, etc.).
   function requestStatus(o: { id: string; orderNumber: string; status: string }, next: string) {
     if (!next || next === o.status) return;
-    const ok = window.confirm(
-      `Change ${o.orderNumber} from “${STATUS_LABEL[o.status] ?? o.status}” to “${STATUS_LABEL[next] ?? next}”?\n\n` +
-        `This updates the order status and adds a timeline entry. Previous history is kept.`,
-    );
-    if (ok) setStatus(o.id, next);
+    setStatusConfirm({
+      id: o.id,
+      orderNumber: o.orderNumber,
+      from: o.status,
+      to: next,
+    });
   }
 
   return (
     <div className="max-w-5xl pb-20">
       <h1 className="text-xl font-bold text-text-primary mb-4">Orders</h1>
+
+      <div className="relative mb-4">
+        <Search
+          size={18}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
+        />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search order #, phone, or name…"
+          className="input pl-10!"
+          type="search"
+        />
+      </div>
 
       <div className="flex flex-wrap gap-2 mb-5">
         {FILTERS.map((f) => (
@@ -156,6 +182,24 @@ export default function OrdersPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={statusConfirm != null}
+        title="Change order status?"
+        message={
+          statusConfirm
+            ? `Change ${statusConfirm.orderNumber} from “${STATUS_LABEL[statusConfirm.from] ?? statusConfirm.from}” to “${STATUS_LABEL[statusConfirm.to] ?? statusConfirm.to}”? This updates the order status and adds a timeline entry.`
+            : ""
+        }
+        confirmLabel="Update status"
+        onCancel={() => setStatusConfirm(null)}
+        onConfirm={() => {
+          if (statusConfirm) {
+            void setStatus(statusConfirm.id, statusConfirm.to);
+          }
+          setStatusConfirm(null);
+        }}
+      />
     </div>
   );
 }

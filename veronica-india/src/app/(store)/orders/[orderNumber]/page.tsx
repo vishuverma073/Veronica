@@ -2,9 +2,9 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
 import { Loader2, CheckCircle2, MessageCircle, Package, ChevronLeft, AlertCircle } from "lucide-react";
+import StoreProductThumb from "@/components/store/StoreProductThumb";
 import { backend, BackendAuthError } from "@/lib/backend";
 import { useAuthStore } from "@/store/authStore";
 import { formatPrice } from "@/lib/utils";
@@ -169,7 +169,13 @@ export default function OrderDetailPage({ params }: { params: Promise<{ orderNum
         {order.items.map((item) => (
           <div key={`${item.skuId}-${item.variant ?? ""}`} className="flex gap-3 p-3.5">
             <div className="w-16 h-16 bg-surface-dim rounded-xl overflow-hidden shrink-0 border border-border-light">
-              <Image src={item.image} alt={item.name} width={64} height={64} className="object-contain w-full h-full p-1.5" />
+              <StoreProductThumb
+                src={item.image}
+                alt={item.name}
+                width={64}
+                height={64}
+                className="object-contain w-full h-full p-1.5"
+              />
             </div>
             <div className="flex-1 min-w-0">
               <Link href={`/product/${item.slug}`} className="text-sm font-semibold text-text-primary line-clamp-2 hover:text-brand-orange">

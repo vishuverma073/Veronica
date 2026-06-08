@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { backend } from "@/lib/backend";
+import { buildCategoryTree } from "@/lib/category-tree";
+import { getShopBrowseHref } from "@/lib/shop-nav";
 import type { Product } from "@veronica/contracts";
 import { getMinPrice, getMaxBasePrice } from "@/lib/sku-helpers";
 import ProductPageClient from "@/components/store/ProductPageClient";
@@ -61,6 +63,8 @@ async function ProductDetailsFetcher({ slug }: { slug: string }) {
     }
 
     const category = await backend.getCategoryById(product.categoryId).catch(() => null);
+    const allCategories = await backend.getAllCategories().catch(() => []);
+    const shopHref = getShopBrowseHref(buildCategoryTree(allCategories));
 
     // Related products from the same category subtree (excluding this one).
     const relatedProducts = category
@@ -88,6 +92,7 @@ async function ProductDetailsFetcher({ slug }: { slug: string }) {
                 categoryName={category?.name}
                 categorySlug={category?.slug}
                 breadcrumbItems={breadcrumbItems}
+                shopHref={shopHref}
                 relatedProducts={relatedProducts}
             />
         </>

@@ -26,6 +26,7 @@ const tsvector = customType<{ data: string }>({
 // ─── Enums ───────────────────────────────────────────────────
 
 export const productStatusEnum = pgEnum("product_status", ["active", "draft", "archived"]);
+export const categoryStatusEnum = pgEnum("category_status", ["active", "archived"]);
 export const orderStatusEnum = pgEnum("order_status", [
   "pending",
   "paid",
@@ -65,6 +66,7 @@ export const categories = pgTable(
     sortOrder: integer("sort_order").default(0).notNull(),
     // Admin-curated: whether this category appears in the storefront header nav.
     showInHeader: boolean("show_in_header").default(false).notNull(),
+    status: categoryStatusEnum("status").default("active").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

@@ -1,12 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ChevronUp, ChevronDown, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
+import { useSWRConfig } from "swr";
 import type { HomeConfig, HomeSectionKey, BannerConfig, Category } from "@veronica/contracts";
 import { useHome, useProducts, useCategories } from "@/lib/admin-hooks";
 import { adminApi } from "@/lib/admin-api";
 import { cn } from "@/lib/utils";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 
 const SECTION_LABELS: Record<HomeSectionKey, string> = {
   hero: "Hero banner",
@@ -18,6 +21,7 @@ const SECTION_LABELS: Record<HomeSectionKey, string> = {
 };
 
 export default function HomeComposerPage() {
+  const { mutate: globalMutate } = useSWRConfig();
   const { data: loaded, isLoading } = useHome();
   const { data: products } = useProducts();
   const { data: categories, mutate: mutateCategories } = useCategories();
@@ -31,6 +35,8 @@ export default function HomeComposerPage() {
   useEffect(() => {
     if (loaded && !config) setConfig(loaded);
   }, [loaded, config]);
+
+  useUnsavedChangesGuard(dirty || Object.keys(navbarPending).length > 0);
 
   if (isLoading || !config) {
     return (
@@ -96,6 +102,7 @@ export default function HomeComposerPage() {
         const saved = await adminApi.putHome(config!);
         setConfig(saved);
         setDirty(false);
+        await globalMutate("nav-categories");
       }
       const navEntries = Object.entries(navbarPending);
       if (navEntries.length > 0) {
@@ -104,6 +111,7 @@ export default function HomeComposerPage() {
         );
         setNavbarPending({});
         mutateCategories();
+        await globalMutate("nav-categories");
       }
       toast.success("Home page saved");
     } catch {
@@ -186,18 +194,22 @@ export default function HomeComposerPage() {
         onToggle={toggleFeatured}
       />
 
-      {/* Category showcase */}
+      {/* Category showcase — also drives store header root buttons */}
       <PickerCard
-        title="Category showcase"
+        title="Category showcase & header nav"
+        hint="Selected categories appear in Shop by Category on the homepage and as buttons in the store header (same order)."
         items={(categories ?? []).filter((c) => c.parentId === null).map((c) => ({ id: c.id, label: c.name }))}
         selected={config.categories.categoryIds}
         onToggle={toggleCategory}
       />
 
-      {/* Navbar builder — choose which top-level categories appear in the store
-          header and which subcategories show in each dropdown. Staged locally and
-          persisted together with the rest on Save. */}
-      <NavbarManager categories={categories ?? []} pending={navbarPending} onToggle={toggleNavbar} />
+      {/* Subcategory dropdowns for each header category above */}
+      <NavbarManager
+        categories={categories ?? []}
+        showcaseRootIds={config.categories.categoryIds}
+        pending={navbarPending}
+        onToggle={toggleNavbar}
+      />
 
       {/* Sticky save */}
       <div
@@ -206,13 +218,23 @@ export default function HomeComposerPage() {
         <span className="text-xs text-text-muted">
           {saving ? "Saving…" : dirty || navbarDirty ? "Unsaved changes" : "All changes saved"}
         </span>
-        <button
-          onClick={save}
-          disabled={saving || (!dirty && !navbarDirty)}
-          className="btn btn-primary text-sm disabled:opacity-50"
-        >
-          <Save size={15} /> Save
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-secondary text-sm hidden sm:inline-flex"
+          >
+            Preview storefront
+          </Link>
+          <button
+            onClick={save}
+            disabled={saving || (!dirty && !navbarDirty)}
+            className="btn btn-primary text-sm disabled:opacity-50"
+          >
+            <Save size={15} /> Save
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -237,21 +259,25 @@ function Field({
 
 function PickerCard({
   title,
+  hint,
   items,
   selected,
   onToggle,
 }: {
   title: string;
+  hint?: string;
   items: { id: number; label: string }[];
   selected: number[];
   onToggle: (id: number) => void;
 }) {
   return (
     <div className="bg-white rounded-xl border border-border-light shadow-sm p-4 mb-4">
-      <h2 className="text-sm font-semibold text-text-primary mb-3">
+      <h2 className="text-sm font-semibold text-text-primary mb-1">
         {title}{" "}
         <span className="text-text-muted font-normal">({selected.length} selected)</span>
       </h2>
+      {hint && <p className="text-xs text-text-muted mb-3">{hint}</p>}
+      {!hint && <div className="mb-3" />}
       <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
         {items.map((it) => (
           <button
@@ -274,40 +300,48 @@ function PickerCard({
 }
 
 /**
- * Store-navbar builder. Lists each top-level category with a "show in navbar"
- * toggle and, nested beneath, its subcategories with "show in dropdown" toggles.
- * Controlled: toggles are staged in the parent's `pending` map and persisted
- * together with the rest of the composer when the admin clicks Save — so the
- * store header only changes after an explicit save.
+ * Configure which categories appear in header dropdowns (any depth under each
+ * showcase root). Staged locally and persisted on Save.
  */
 function NavbarManager({
   categories,
+  showcaseRootIds,
   pending,
   onToggle,
 }: {
   categories: Category[];
   pending: Record<number, boolean>;
   onToggle: (id: number, value: boolean) => void;
+  showcaseRootIds: number[];
 }) {
-  // Desired value = a staged change if present, else the saved server value.
   const flag = (c: Category) => pending[c.id] ?? !!c.showInHeader;
 
   const roots = categories
-    .filter((c) => c.parentId === null)
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+    .filter((c) => c.parentId === null && c.status !== "archived")
+    .filter((c) =>
+      showcaseRootIds.length > 0 ? showcaseRootIds.includes(c.id) : flag(c),
+    )
+    .sort((a, b) => {
+      if (showcaseRootIds.length > 0) {
+        return showcaseRootIds.indexOf(a.id) - showcaseRootIds.indexOf(b.id);
+      }
+      return a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
+    });
+
   const childrenOf = (parentId: number) =>
     categories
-      .filter((c) => c.parentId === parentId)
+      .filter((c) => c.parentId === parentId && c.status !== "archived")
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 
-  function Toggle({ cat, sub }: { cat: Category; sub?: boolean }) {
+  function Toggle({ cat, depth = 0 }: { cat: Category; depth?: number }) {
     const checked = flag(cat);
     return (
       <label
         className={cn(
           "flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-surface-dim/70",
-          sub && "text-sm",
+          depth > 0 && "text-sm",
         )}
+        style={{ paddingLeft: `${10 + depth * 14}px` }}
       >
         <input
           type="checkbox"
@@ -315,36 +349,48 @@ function NavbarManager({
           onChange={() => onToggle(cat.id, !checked)}
           className="w-4 h-4 accent-brand-orange"
         />
-        <span className={cn("flex-1", sub ? "text-text-secondary" : "font-medium text-text-primary")}>
+        <span className={cn("flex-1", depth === 0 ? "font-medium text-text-primary" : "text-text-secondary")}>
           {cat.name}
         </span>
       </label>
     );
   }
 
+  function NavBranch({ parentId, depth }: { parentId: number; depth: number }) {
+    const kids = childrenOf(parentId);
+    if (kids.length === 0) return null;
+    return (
+      <div className={cn(depth > 0 && "border-l border-border/60 ml-3")}>
+        {kids.map((kid) => (
+          <div key={kid.id}>
+            <Toggle cat={kid} depth={depth} />
+            <NavBranch parentId={kid.id} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-xl border border-border-light shadow-sm p-4 mb-4">
-      <h2 className="text-sm font-semibold text-text-primary mb-1">Store navbar</h2>
+      <h2 className="text-sm font-semibold text-text-primary mb-1">Header dropdown menus</h2>
       <p className="text-xs text-text-muted mb-3">
-        Tick a category to show it in the header. Tick its subcategories to list them in that
-        item&rsquo;s dropdown menu. Click <span className="font-semibold">Save</span> to apply.
+        For each header category, choose which child categories appear in the dropdown (supports
+        nested levels). Click <span className="font-semibold">Save</span> to apply.
       </p>
-      {roots.length === 0 ? (
+      {showcaseRootIds.length === 0 ? (
+        <span className="text-xs text-text-muted">Select header categories above first.</span>
+      ) : roots.length === 0 ? (
         <span className="text-xs text-text-muted">No categories yet.</span>
       ) : (
-        <div className="space-y-1.5 max-h-96 overflow-y-auto">
+        <div className="space-y-3 max-h-96 overflow-y-auto">
           {roots.map((root) => {
             const kids = childrenOf(root.id);
+            if (kids.length === 0) return null;
             return (
-              <div key={root.id} className="rounded-lg bg-surface-dim/40">
-                <Toggle cat={root} />
-                {flag(root) && kids.length > 0 && (
-                  <div className="ml-6 mb-1 border-l border-border/60 pl-2">
-                    {kids.map((kid) => (
-                      <Toggle key={kid.id} cat={kid} sub />
-                    ))}
-                  </div>
-                )}
+              <div key={root.id} className="rounded-lg bg-surface-dim/40 px-2 py-2">
+                <p className="text-sm font-medium text-text-primary px-2.5 py-1">{root.name}</p>
+                <NavBranch parentId={root.id} depth={1} />
               </div>
             );
           })}

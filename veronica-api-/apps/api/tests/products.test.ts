@@ -16,8 +16,18 @@ const listRow = {
   isNew: false,
   tags: ["Imported"],
   skus: [
-    { price: "3060", salePrice: "2100" },
-    { price: "4200", salePrice: null },
+    { price: "3060", salePrice: "2100", dimensionValues: { Size: "18×16" } },
+    { price: "4200", salePrice: null, dimensionValues: { Size: "24×20" } },
+  ],
+  dimensions: [
+    {
+      name: "Size",
+      sortOrder: 0,
+      values: [
+        { value: "18×16", sortOrder: 0 },
+        { value: "24×20", sortOrder: 1 },
+      ],
+    },
   ],
   images: [{ url: "/a.png", sortOrder: 0 }],
 };
@@ -46,8 +56,31 @@ const detailRow = {
   updatedAt: new Date(),
 };
 
-function mockDb(opts: { findMany?: unknown[]; findFirst?: unknown; execIds?: number[] } = {}): DbClient {
+function mockDb(
+  opts: {
+    findMany?: unknown[];
+    findFirst?: unknown;
+    execIds?: number[];
+    /** Category row returned by the slug lookup; omit for default active root. */
+    categoryRoot?: { id: number; status: "active" | "archived" } | null;
+  } = {},
+): DbClient {
+  const categoryRoot =
+    opts.categoryRoot === undefined ? { id: 1, status: "active" as const } : opts.categoryRoot;
   return {
+    select: () => ({
+      from: () => ({
+        where: () => {
+          const count = opts.findMany?.length ?? 0;
+          return {
+            limit: async () => (categoryRoot ? [categoryRoot] : []),
+            then(onFulfilled: (v: { count: number }[]) => unknown) {
+              return Promise.resolve([{ count }]).then(onFulfilled);
+            },
+          };
+        },
+      }),
+    }),
     query: {
       products: {
         findMany: async () => opts.findMany ?? [],
@@ -74,6 +107,7 @@ describe("GET /products", () => {
       maxBasePrice: 4200,
       bestDiscount: 31, // (1 - 2100/3060) * 100 ≈ 31
       image: "/a.png",
+      sizes: ["18×16", "24×20"],
     });
     expect(body.nextCursor).toBeNull();
   });
@@ -115,7 +149,7 @@ describe("GET /products/by-category/:slug", () => {
   });
 
   it("returns [] for an unknown category slug", async () => {
-    const res = await createApp({ db: mockDb({ execIds: [] }) }).request(
+    const res = await createApp({ db: mockDb({ categoryRoot: null }) }).request(
       "/products/by-category/nope",
     );
     expect(res.status).toBe(200);

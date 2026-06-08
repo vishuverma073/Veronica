@@ -5,6 +5,7 @@ process.env.NODE_ENV = "test"; // forces SMS stub mode (no real MSG91 call)
 import {
   orderTrackingUrl,
   sendOrderConfirmationSms,
+  sendOtp,
   sendTransactionalSms,
 } from "../src/lib/sms.js";
 
@@ -24,6 +25,31 @@ describe("orderTrackingUrl", () => {
   it("falls back to the production domain when unset", () => {
     delete process.env.STOREFRONT_URL;
     expect(orderTrackingUrl("VEXYZ")).toBe("https://veronicaindia.com/orders/VEXYZ");
+  });
+});
+
+describe("OTP SMS (stub mode)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("prints a visible dev OTP line and structured otp_stub log", async () => {
+    await sendOtp("+919876543210", "123456");
+
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("🔐 DEV OTP"))).toBe(true);
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("123456"))).toBe(true);
+
+    const line = logSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes("otp_stub"));
+    expect(line).toBeTruthy();
+    expect(JSON.parse(line!).code).toBe("123456");
   });
 });
 

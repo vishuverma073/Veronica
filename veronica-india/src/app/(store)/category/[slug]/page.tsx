@@ -2,13 +2,16 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import Link from "next/link";
-import { Package } from "lucide-react";
 import { backend } from "@/lib/backend";
+import { buildCategoryTree } from "@/lib/category-tree";
 import type { CategoryWithBreadcrumb } from "@veronica/contracts";
 import Breadcrumb from "@/components/store/Breadcrumb";
+import CategorySidebar from "@/components/store/CategorySidebar";
 import SectionHeader from "@/components/store/SectionHeader";
-import CategoryProductGrid from "@/components/store/CategoryProductGrid";
+import CategoryProductLoader from "@/components/store/CategoryProductLoader";
 import { ProductCarouselSkeleton } from "@/components/store/Skeletons";
+import LastVisitedCategoryTracker from "@/components/store/nav/LastVisitedCategoryTracker";
+import { getShopBrowseHref } from "@/lib/shop-nav";
 
 interface CategoryPageProps {
     params: Promise<{ slug: string }>;
@@ -25,36 +28,7 @@ export async function generateMetadata({ params }: CategoryPageProps): Promise<M
 }
 
 async function CategoryProductsSection({ slug }: { slug: string }) {
-    // listProducts(category) returns the full subtree — for a leaf that's just
-    // its own products, matching the old direct-category behaviour.
-    // NOTE: the public /products endpoint hard-caps `limit` at 50, so requesting
-    // more than that 400s. Cap at 50 (the backend max for this endpoint).
-    const items = await backend.getProductsByCategory(slug, 50);
-    const products = items.map((p) => ({
-        slug: p.slug,
-        name: p.name,
-        image: p.image,
-        minPrice: p.minPrice,
-        maxBasePrice: p.maxBasePrice,
-        discount: p.bestDiscount,
-        isBestseller: p.isBestseller,
-        isNew: p.isNew,
-    }));
-
-    if (products.length === 0) {
-        return (
-            <div className="empty-state">
-                <div className="empty-state-icon">
-                    <Package size={28} strokeWidth={1.5} />
-                </div>
-                <p className="text-text-secondary font-medium mb-1">No products found</p>
-                <p className="text-sm text-text-muted mb-6">Check back soon for new arrivals in this category.</p>
-                <Link href="/" className="btn btn-primary">Back to Home</Link>
-            </div>
-        );
-    }
-
-    return <CategoryProductGrid products={products} />;
+    return <CategoryProductLoader slug={slug} />;
 }
 
 export default async function CategoryPage({ params }: CategoryPageProps) {
@@ -79,19 +53,21 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
     ].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     const hasSubCategories = displaySubCategories.length > 0;
 
-    // Sidebar + mobile tabs list every category, alphabetically (matching the header nav).
-    const allRootCategories = (await backend.getCategories()).sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    );
+    // Sidebar + mobile tabs: expandable tree on the active branch.
+    const allCategories = await backend.getAllCategories();
+    const breadcrumbIdSet = new Set(breadcrumb.map((c) => c.id));
 
     const breadcrumbItems = breadcrumb.map((cat, i) => ({
         label: cat.name,
         ...(i < breadcrumb.length - 1 ? { href: `/category/${cat.slug}` } : {}),
     }));
 
+    const shopHref = getShopBrowseHref(buildCategoryTree(allCategories));
+
     return (
         <div className="max-w-380 mx-auto px-4 py-8">
-            <Breadcrumb items={breadcrumbItems} className="mb-8" />
+            <LastVisitedCategoryTracker slug={slug} name={category.name} />
+            <Breadcrumb items={breadcrumbItems} shopHref={shopHref} className="mb-8" />
 
             <div className="flex gap-10">
                 {/* Desktop Sidebar */}
@@ -100,20 +76,11 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
                         <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-text-muted mb-4">
                             Categories
                         </h3>
-                        <nav className="space-y-1">
-                            {allRootCategories.map((cat) => (
-                                <Link
-                                    key={cat.id}
-                                    href={`/category/${cat.slug}`}
-                                    className={`block px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${cat.slug === slug || breadcrumb.some((a) => a.id === cat.id)
-                                        ? "bg-brand-orange text-white shadow-sm"
-                                        : "text-text-secondary hover:bg-surface-dim hover:text-brand-black"
-                                        }`}
-                                >
-                                    {cat.name}
-                                </Link>
-                            ))}
-                        </nav>
+                        <CategorySidebar
+                            categories={allCategories}
+                            currentSlug={slug}
+                            breadcrumbIds={breadcrumbIdSet}
+                        />
                     </div>
                 </aside>
 
@@ -123,7 +90,10 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
 
                     {/* Mobile Category Tabs */}
                     <div className="lg:hidden flex gap-4 overflow-x-auto scroll-x-hidden border-b border-border-light mb-6">
-                        {allRootCategories.map((cat) => (
+                        {allCategories
+                            .filter((c) => c.parentId === null)
+                            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+                            .map((cat) => (
                             <Link
                                 key={cat.id}
                                 href={`/category/${cat.slug}`}

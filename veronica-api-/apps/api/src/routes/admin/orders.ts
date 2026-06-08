@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import {
   AddOrderEventRequestSchema,
   OrderEventListResponseSchema,
@@ -35,8 +35,22 @@ export function makeAdminOrdersRouter(db: DbClient) {
   // Optional ?status filters to a single order status.
   router.get("/", async (c) => {
     const status = c.req.query("status") as OrderStatus | undefined;
+    const q = c.req.query("q")?.trim();
+    const conditions = [];
+    if (status) conditions.push(eq(orders.status, status));
+    if (q) {
+      conditions.push(
+        or(
+          sql`${orders.orderNumber} ILIKE ${`%${q}%`}`,
+          sql`${orders.customerPhone} ILIKE ${`%${q}%`}`,
+          sql`${orders.customerName} ILIKE ${`%${q}%`}`,
+        ),
+      );
+    }
+    const where = conditions.length ? and(...conditions) : undefined;
+
     const rows = await db.query.orders.findMany({
-      where: status ? eq(orders.status, status) : undefined,
+      where,
       orderBy: [desc(orders.createdAt)],
       limit: 200,
       with: { items: { columns: { qty: true } } },

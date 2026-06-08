@@ -28,6 +28,35 @@ Then open http://localhost:3000 (admin at http://localhost:3000/admin).
 
 ## Local dev notes
 
-- **Login / OTP**: SMS is in stub mode (no MSG91 keys), so the one-time code is **printed in the backend terminal** instead of texted. Sign in, then copy the `code` from the backend log (`"msg":"otp_stub"`).
+- **Login / OTP**: SMS is in stub mode (no MSG91 keys), so the one-time code is **printed in the backend terminal** instead of texted. After you tap “Send code”, look for **`🔐 DEV OTP for +91…: 123456`** in the terminal running `pnpm dev`.
 - **Cart**: in dev the cart is stored in `sessionStorage`, so each fresh browser session starts empty (reloads within a session keep it). Production uses `localStorage`.
 - The backend allows CORS from `localhost`/`127.0.0.1` automatically; add deployed frontend origins via `CORS_ORIGINS` (comma-separated) in the API `.env`.
+
+## Online orders — production minimum
+
+Everything below the site/admin baseline. Skip Resend, Inngest, Sentry, Slack, etc. until later.
+
+**API** (`veronica-api-/apps/api/.env`):
+
+| Variable | Why |
+|----------|-----|
+| `DATABASE_URL` | Cart, orders, users |
+| `JWT_ACCESS_SECRET` + `JWT_REFRESH_SECRET` | Customer login session |
+| `MSG91_AUTH_KEY`, `MSG91_SENDER_ID`, `MSG91_TEMPLATE_ID` | Phone OTP (required in production — no SMS = no login) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Payment modal + webhook |
+| `CORS_ORIGINS=https://yourdomain.com` | Browser → API |
+| `STOREFRONT_URL=https://yourdomain.com` | Order tracking links |
+| `NODE_ENV=production` | Disables dev OTP/payment shortcuts |
+
+Register Razorpay webhook: `POST https://<api-host>/webhooks/razorpay`
+
+**Frontend** (`veronica-india/.env.local` on Vercel):
+
+```
+NEXT_PUBLIC_API_URL=https://<api-host>
+NEXT_PUBLIC_USE_MOCKS=false
+NEXT_PUBLIC_MOCK_PAYMENTS=false
+NEXT_PUBLIC_SITE_URL=https://yourdomain.com
+```
+
+**Local test flow (no MSG91 yet):** keep `ENABLE_DEV_AUTH_BYPASS=1` on the API, use Razorpay **test** keys, OTP appears in the API terminal (`🔐 DEV OTP`).

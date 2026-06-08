@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { MessageCircle } from "lucide-react";
 import { formatPrice, generateWhatsAppUrl } from "@/lib/utils";
+import StoreProductThumb from "@/components/store/StoreProductThumb";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
 import { shippingFeeFor, amountToFreeShipping } from "@/lib/checkout";
 import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, ArrowLeft } from "lucide-react";
 import { useCartStore } from "@/store/cartStore";
@@ -15,10 +16,12 @@ const PHONE = "9350529717";
 
 export default function CartPage() {
     const [mounted, setMounted] = useState(false);
+    const [confirmEmpty, setConfirmEmpty] = useState(false);
 
     const items = useCartStore((s) => s.items);
     const removeItem = useCartStore((s) => s.removeItem);
     const updateQty = useCartStore((s) => s.updateQty);
+    const emptyCart = useCartStore((s) => s.emptyCart);
     const authStatus = useAuthStore((s) => s.status);
     const { data: settings } = useStoreSettings();
 
@@ -83,14 +86,23 @@ export default function CartPage() {
                         ({items.length} {items.length === 1 ? "item" : "items"})
                     </span>
                 </h1>
-                <Link
-                    href="/"
-                    className="flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-brand-orange transition-colors"
-                >
-                    <ArrowLeft size={14} />
-                    <span className="hidden sm:inline">Continue Shopping</span>
-                    <span className="sm:hidden">Shop</span>
-                </Link>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setConfirmEmpty(true)}
+                        className="flex items-center gap-1.5 text-sm font-medium text-text-muted hover:text-danger transition-colors"
+                    >
+                        <Trash2 size={14} />
+                        <span className="hidden sm:inline">Empty cart</span>
+                    </button>
+                    <Link
+                        href="/"
+                        className="flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-brand-orange transition-colors"
+                    >
+                        <ArrowLeft size={14} />
+                        <span className="hidden sm:inline">Continue Shopping</span>
+                        <span className="sm:hidden">Shop</span>
+                    </Link>
+                </div>
             </div>
 
             <div className="space-y-3 mb-6">
@@ -103,7 +115,7 @@ export default function CartPage() {
                             href={`/product/${item.slug}`}
                             className="w-18 h-18 sm:w-20 sm:h-20 bg-surface-dim rounded-xl overflow-hidden shrink-0 border border-border-light"
                         >
-                            <Image
+                            <StoreProductThumb
                                 src={item.image}
                                 alt={item.name}
                                 width={80}
@@ -212,6 +224,19 @@ export default function CartPage() {
             <p className="text-center text-xs text-text-muted mt-4">
                 Secure checkout · or send your order to us on WhatsApp for confirmation.
             </p>
+
+            <ConfirmDialog
+                open={confirmEmpty}
+                title="Empty your cart?"
+                message="Remove all items from your cart? This cannot be undone."
+                confirmLabel="Empty cart"
+                danger
+                onCancel={() => setConfirmEmpty(false)}
+                onConfirm={() => {
+                    emptyCart();
+                    setConfirmEmpty(false);
+                }}
+            />
         </div>
     );
 }

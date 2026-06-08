@@ -30,6 +30,14 @@ export function useCategories() {
   return useSWR(["admin/categories"], () => adminApi.listCategories(), noRetryOn401);
 }
 
+export function useCategoryProducts(categoryId: number | null) {
+  return useSWR(
+    categoryId != null ? ["admin/products", "categoryTree", categoryId] : null,
+    () => adminApi.listProductsForCategoryTree(categoryId as number),
+    noRetryOn401,
+  );
+}
+
 export function useHome() {
   return useSWR(["admin/home"], () => adminApi.getHome(), noRetryOn401);
 }

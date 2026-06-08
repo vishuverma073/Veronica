@@ -49,6 +49,7 @@ describe("admin mock handlers", () => {
     expect(Array.isArray(body.items)).toBe(true);
     z.array(ProductListItemSchema).parse(body.items);
     expect(body.items.length).toBeGreaterThanOrEqual(10);
+    expect(body.items.every((p: { status: string }) => p.status !== "archived")).toBe(true);
   });
 
   it("returns a full product by id", async () => {
@@ -76,11 +77,96 @@ describe("admin mock handlers", () => {
     }
   });
 
-  it("blocks deleting a category that has products", async () => {
+  it("archives and restores a category subtree", async () => {
+    const archiveRes = await fetch(`${API_BASE}/admin/categories/1/archive`, {
+      method: "POST",
+      headers: AUTH,
+    });
+    expect(archiveRes.status).toBe(200);
+
+    const catsAfterArchive = CategoryListSchema.parse(
+      await (await fetch(`${API_BASE}/admin/categories`, { headers: AUTH })).json(),
+    );
+    expect(catsAfterArchive.find((c) => c.id === 1)?.status).toBe("archived");
+    expect(catsAfterArchive.find((c) => c.id === 10)?.status).toBe("archived");
+
+    const storefrontRoots = await (await fetch(`${API_BASE}/categories`)).json();
+    expect(storefrontRoots.some((c: { id: number }) => c.id === 1)).toBe(false);
+
+    const restoreRes = await fetch(`${API_BASE}/admin/categories/1/restore`, {
+      method: "POST",
+      headers: AUTH,
+    });
+    expect(restoreRes.status).toBe(200);
+
+    const catsAfterRestore = CategoryListSchema.parse(
+      await (await fetch(`${API_BASE}/admin/categories`, { headers: AUTH })).json(),
+    );
+    expect(catsAfterRestore.find((c) => c.id === 1)?.status).toBe("active");
+  });
+
+  it("archives and restores a product", async () => {
+    const archiveRes = await fetch(`${API_BASE}/admin/products/4/archive`, {
+      method: "POST",
+      headers: AUTH,
+    });
+    expect(archiveRes.status).toBe(200);
+
+    const defaultList = await (
+      await fetch(`${API_BASE}/admin/products`, { headers: AUTH })
+    ).json();
+    expect(defaultList.items.some((p: { id: number }) => p.id === 4)).toBe(false);
+
+    const archivedList = await (
+      await fetch(`${API_BASE}/admin/products?status=archived`, { headers: AUTH })
+    ).json();
+    expect(archivedList.items.some((p: { id: number }) => p.id === 4)).toBe(true);
+
+    const restoreRes = await fetch(`${API_BASE}/admin/products/4/restore`, {
+      method: "POST",
+      headers: AUTH,
+    });
+    expect(restoreRes.status).toBe(200);
+
+    const afterRestore = await (
+      await fetch(`${API_BASE}/admin/products`, { headers: AUTH })
+    ).json();
+    expect(afterRestore.items.some((p: { id: number }) => p.id === 4)).toBe(true);
+  });
+
+  it("filters products by categoryTreeId and includes category counts", async () => {
+    const cats = CategoryListSchema.parse(
+      await (await fetch(`${API_BASE}/admin/categories`, { headers: AUTH })).json(),
+    );
+    const health = cats.find((c) => c.slug === "health-faucet-sets");
+    expect(health?.subtreeProductCount).toBeGreaterThan(0);
+
+    const res = await fetch(`${API_BASE}/admin/products?categoryTreeId=${health!.id}`, {
+      headers: AUTH,
+    });
+    const body = await res.json();
+    expect(body.items.length).toBe(health!.subtreeProductCount);
+    for (const item of body.items) {
+      expect(item.categoryId).toBeGreaterThan(0);
+    }
+  });
+
+  it("cascade-deletes a category with products", async () => {
+    const before = CategoryListSchema.parse(
+      await (await fetch(`${API_BASE}/admin/categories`, { headers: AUTH })).json(),
+    );
+    const target = before.find((c) => c.id === 10);
+    expect(target).toBeTruthy();
+
     const res = await fetch(`${API_BASE}/admin/categories/10`, {
       method: "DELETE",
       headers: AUTH,
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+
+    const after = CategoryListSchema.parse(
+      await (await fetch(`${API_BASE}/admin/categories`, { headers: AUTH })).json(),
+    );
+    expect(after.find((c) => c.id === 10)).toBeUndefined();
   });
 });

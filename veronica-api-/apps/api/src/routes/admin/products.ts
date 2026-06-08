@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, ilike, lt, or } from "drizzle-orm";
+import { and, eq, ilike, inArray, lt, ne, or } from "drizzle-orm";
 import {
   AdminProductCreateSchema,
   AdminProductDetailSchema,
@@ -20,6 +20,7 @@ import { makeRequireAdmin } from "../../middleware/auth.js";
 import { logAudit } from "../../lib/audit.js";
 import { invalidateProductCaches } from "../../lib/cache.js";
 import { slugify } from "../../lib/slug.js";
+import { getProductCategoryIdsForTree } from "../../lib/category-products.js";
 import type { AppEnv } from "../../lib/types.js";
 
 type Tx = Parameters<Parameters<DbClient["transaction"]>[0]>[0];
@@ -67,6 +68,66 @@ async function uniqueSlug(db: DbClient | Tx, base: string, excludeId?: number): 
   return `${base}-${Date.now()}`;
 }
 
+async function ensureUniqueSkuCode(
+  tx: Tx,
+  base: string,
+  reserved: Set<string> = new Set(),
+): Promise<string> {
+  const trimmed = base.trim() || "SKU";
+  let candidate = trimmed.slice(0, 80);
+  for (let n = 0; n < 100; n++) {
+    const [row] = await tx
+      .select({ id: skusTable.id })
+      .from(skusTable)
+      .where(eq(skusTable.skuCode, candidate))
+      .limit(1);
+    if (!row && !reserved.has(candidate)) return candidate;
+    const suffix = n === 0 ? "-2" : `-${n + 2}`;
+    candidate = `${trimmed.slice(0, Math.max(1, 80 - suffix.length))}${suffix}`;
+  }
+  return `${trimmed.slice(0, 60)}-${Date.now()}`;
+}
+
+function postgresErrorText(err: unknown): string {
+  const parts: string[] = [];
+  let cur: unknown = err;
+  for (let i = 0; i < 5 && cur; i++) {
+    if (cur instanceof Error) {
+      parts.push(cur.message);
+      cur = cur.cause;
+    } else if (typeof cur === "string") {
+      parts.push(cur);
+      break;
+    } else {
+      break;
+    }
+  }
+  return parts.join(" ");
+}
+
+function productWriteError(c: { json: (body: unknown, status?: number) => Response }, err: unknown) {
+  const text = postgresErrorText(err);
+  if (/numeric field overflow|22003/i.test(text)) {
+    return c.json(
+      { error: "Invalid price", message: "Price must be at most ₹99,999,999.99" },
+      400,
+    );
+  }
+  if (/skus_sku_code_unique|duplicate key.*sku_code/i.test(text)) {
+    return c.json(
+      {
+        error: "Duplicate SKU code",
+        message: "Each SKU code must be unique across the store",
+      },
+      400,
+    );
+  }
+  if (/products_category_id_fkey|foreign key.*category/i.test(text)) {
+    return c.json({ error: "Invalid category", message: "Choose a valid category" }, 400);
+  }
+  return null;
+}
+
 async function replaceChildren(tx: Tx, productId: number, body: ProductChildren): Promise<void> {
   const existingDims = await tx
     .select({ id: dimensionsTable.id })
@@ -109,17 +170,22 @@ async function replaceChildren(tx: Tx, productId: number, body: ProductChildren)
     }
   }
   if (body.skus?.length) {
-    await tx.insert(skusTable).values(
-      body.skus.map((s) => ({
+    const reserved = new Set<string>();
+    const rows = [];
+    for (const s of body.skus) {
+      const skuCode = await ensureUniqueSkuCode(tx, s.skuCode, reserved);
+      reserved.add(skuCode);
+      rows.push({
         productId,
-        skuCode: s.skuCode,
+        skuCode,
         price: String(s.price),
         salePrice: s.salePrice === null || s.salePrice === undefined ? null : String(s.salePrice),
         dimensionValues: s.dimensionValues,
         attributes: s.attributes ?? null,
         stock: s.stock ?? null,
-      })),
-    );
+      });
+    }
+    await tx.insert(skusTable).values(rows);
   }
 }
 
@@ -184,18 +250,30 @@ export function makeAdminProductsRouter(db: DbClient) {
   const router = new Hono<AppEnv>();
   router.use("*", makeRequireAdmin(db));
 
-  // GET /admin/products — list ALL (incl. drafts/archived), filtered, cursor-paginated.
+  // GET /admin/products — cursor-paginated. Default list excludes archived
+  // (active + draft only); pass ?status=archived|active|draft to narrow further.
   router.get("/", async (c) => {
     const q = c.req.query();
     const conditions = [];
 
     const status = ProductStatusSchema.safeParse(q.status);
-    if (status.success) conditions.push(eq(products.status, status.data));
+    if (status.success) {
+      conditions.push(eq(products.status, status.data));
+    } else {
+      conditions.push(ne(products.status, "archived"));
+    }
     if (q.isBestseller === "1") conditions.push(eq(products.isBestseller, true));
     if (q.isNew === "1") conditions.push(eq(products.isNew, true));
     if (q.isFeatured === "1") conditions.push(eq(products.isFeatured, true));
     if (q.categoryId && Number.isInteger(Number(q.categoryId))) {
       conditions.push(eq(products.categoryId, Number(q.categoryId)));
+    }
+    if (q.categoryTreeId && Number.isInteger(Number(q.categoryTreeId))) {
+      const subtreeIds = await getProductCategoryIdsForTree(db, Number(q.categoryTreeId));
+      if (subtreeIds.length === 0) {
+        return c.json(AdminProductListSchema.parse({ items: [], nextCursor: null }));
+      }
+      conditions.push(inArray(products.categoryId, subtreeIds));
     }
     if (q.q) conditions.push(ilike(products.name, `%${q.q}%`));
 
@@ -246,6 +324,7 @@ export function makeAdminProductsRouter(db: DbClient) {
         isBestseller: p.isBestseller,
         isNew: p.isNew,
         isFeatured: p.isFeatured,
+        categoryId: p.categoryId,
         categoryName: p.category?.name ?? "",
         primaryImage,
         minPrice: effective.length ? Math.min(...effective) : 0,
@@ -279,28 +358,35 @@ export function makeAdminProductsRouter(db: DbClient) {
     }
     const body = parsed.data;
 
-    const newId = await db.transaction(async (tx) => {
-      const slug = body.slug ?? (await uniqueSlug(tx, slugify(body.name)));
-      const [prod] = await tx
-        .insert(products)
-        .values({
-          categoryId: body.categoryId,
-          name: body.name,
-          slug,
-          description: body.description,
-          status: body.status,
-          isBestseller: body.isBestseller,
-          isNew: body.isNew,
-          isFeatured: body.isFeatured,
-          categoryPinOrder: body.categoryPinOrder ?? null,
-          tags: body.tags,
-          specifications: body.specifications ?? null,
-          includedAccessories: body.includedAccessories ?? null,
-        })
-        .returning({ id: products.id });
-      await replaceChildren(tx, prod!.id, body);
-      return prod!.id;
-    });
+    let newId: number;
+    try {
+      newId = await db.transaction(async (tx) => {
+        const slug = body.slug ?? (await uniqueSlug(tx, slugify(body.name)));
+        const [prod] = await tx
+          .insert(products)
+          .values({
+            categoryId: body.categoryId,
+            name: body.name,
+            slug,
+            description: body.description,
+            status: body.status,
+            isBestseller: body.isBestseller,
+            isNew: body.isNew,
+            isFeatured: body.isFeatured,
+            categoryPinOrder: body.categoryPinOrder ?? null,
+            tags: body.tags,
+            specifications: body.specifications ?? null,
+            includedAccessories: body.includedAccessories ?? null,
+          })
+          .returning({ id: products.id });
+        await replaceChildren(tx, prod!.id, body);
+        return prod!.id;
+      });
+    } catch (err) {
+      const mapped = productWriteError(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
 
     const detail = await getProductDetail(db, newId);
     await logAudit(db, {
@@ -328,42 +414,48 @@ export function makeAdminProductsRouter(db: DbClient) {
     const before = await getProductDetail(db, id);
     if (!before) return c.json({ error: "Not Found" }, 404);
 
-    await db.transaction(async (tx) => {
-      const topLevel: Record<string, unknown> = { updatedAt: new Date() };
-      if (body.categoryId !== undefined) topLevel.categoryId = body.categoryId;
-      if (body.name !== undefined) topLevel.name = body.name;
-      if (body.slug !== undefined) topLevel.slug = body.slug;
-      if (body.description !== undefined) topLevel.description = body.description;
-      if (body.status !== undefined) topLevel.status = body.status;
-      if (body.isBestseller !== undefined) topLevel.isBestseller = body.isBestseller;
-      if (body.isNew !== undefined) topLevel.isNew = body.isNew;
-      if (body.isFeatured !== undefined) topLevel.isFeatured = body.isFeatured;
-      if (body.categoryPinOrder !== undefined) topLevel.categoryPinOrder = body.categoryPinOrder;
-      if (body.tags !== undefined) topLevel.tags = body.tags;
-      if (body.specifications !== undefined) topLevel.specifications = body.specifications;
-      if (body.includedAccessories !== undefined) topLevel.includedAccessories = body.includedAccessories;
-      await tx.update(products).set(topLevel).where(eq(products.id, id));
+    try {
+      await db.transaction(async (tx) => {
+        const topLevel: Record<string, unknown> = { updatedAt: new Date() };
+        if (body.categoryId !== undefined) topLevel.categoryId = body.categoryId;
+        if (body.name !== undefined) topLevel.name = body.name;
+        if (body.slug !== undefined) topLevel.slug = body.slug;
+        if (body.description !== undefined) topLevel.description = body.description;
+        if (body.status !== undefined) topLevel.status = body.status;
+        if (body.isBestseller !== undefined) topLevel.isBestseller = body.isBestseller;
+        if (body.isNew !== undefined) topLevel.isNew = body.isNew;
+        if (body.isFeatured !== undefined) topLevel.isFeatured = body.isFeatured;
+        if (body.categoryPinOrder !== undefined) topLevel.categoryPinOrder = body.categoryPinOrder;
+        if (body.tags !== undefined) topLevel.tags = body.tags;
+        if (body.specifications !== undefined) topLevel.specifications = body.specifications;
+        if (body.includedAccessories !== undefined) topLevel.includedAccessories = body.includedAccessories;
+        await tx.update(products).set(topLevel).where(eq(products.id, id));
 
-      // Nested arrays are replaced wholesale only when provided.
-      if (body.images !== undefined || body.dimensions !== undefined || body.skus !== undefined) {
-        await replaceChildren(tx, id, {
-          images: body.images ?? before.images,
-          dimensions: body.dimensions ?? before.dimensions.map((d) => ({
-            name: d.name,
-            sortOrder: d.sortOrder,
-            values: d.values.map((v) => ({ value: v.value, label: v.label, sortOrder: v.sortOrder })),
-          })),
-          skus: body.skus ?? before.skus.map((s) => ({
-            skuCode: s.skuCode,
-            price: s.price,
-            salePrice: s.salePrice,
-            dimensionValues: s.dimensionValues,
-            attributes: s.attributes,
-            stock: s.stock,
-          })),
-        });
-      }
-    });
+        // Nested arrays are replaced wholesale only when provided.
+        if (body.images !== undefined || body.dimensions !== undefined || body.skus !== undefined) {
+          await replaceChildren(tx, id, {
+            images: body.images ?? before.images,
+            dimensions: body.dimensions ?? before.dimensions.map((d) => ({
+              name: d.name,
+              sortOrder: d.sortOrder,
+              values: d.values.map((v) => ({ value: v.value, label: v.label, sortOrder: v.sortOrder })),
+            })),
+            skus: body.skus ?? before.skus.map((s) => ({
+              skuCode: s.skuCode,
+              price: s.price,
+              salePrice: s.salePrice,
+              dimensionValues: s.dimensionValues,
+              attributes: s.attributes,
+              stock: s.stock,
+            })),
+          });
+        }
+      });
+    } catch (err) {
+      const mapped = productWriteError(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
 
     const after = await getProductDetail(db, id);
     await logAudit(db, {
@@ -379,8 +471,8 @@ export function makeAdminProductsRouter(db: DbClient) {
     return c.json(after);
   });
 
-  // DELETE /admin/products/:id — soft delete (archive).
-  router.delete("/:id", async (c) => {
+  // POST /admin/products/:id/archive — hide from storefront (soft delete).
+  router.post("/:id/archive", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
 
@@ -394,13 +486,59 @@ export function makeAdminProductsRouter(db: DbClient) {
 
     await logAudit(db, {
       actorUserId: c.get("adminUserId") ?? null,
-      action: "product.delete",
+      action: "product.archive",
       resourceType: "product",
       resourceId: String(id),
       changes: { before, after: { ...before, status: "archived" } },
     });
     await invalidateProductCaches(before.slug);
     return c.json({ success: true, id, status: "archived" });
+  });
+
+  // POST /admin/products/:id/restore — return to the storefront as active.
+  router.post("/:id/restore", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
+
+    const before = await getProductDetail(db, id);
+    if (!before) return c.json({ error: "Not Found" }, 404);
+
+    await db
+      .update(products)
+      .set({ status: "active", updatedAt: new Date() })
+      .where(eq(products.id, id));
+
+    const after = await getProductDetail(db, id);
+    await logAudit(db, {
+      actorUserId: c.get("adminUserId") ?? null,
+      action: "product.restore",
+      resourceType: "product",
+      resourceId: String(id),
+      changes: { before, after },
+    });
+    if (after) await invalidateProductCaches(after.slug);
+    return c.json({ success: true, id, status: "active" });
+  });
+
+  // DELETE /admin/products/:id — permanent removal from the database.
+  router.delete("/:id", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
+
+    const before = await getProductDetail(db, id);
+    if (!before) return c.json({ error: "Not Found" }, 404);
+
+    await db.delete(products).where(eq(products.id, id));
+
+    await logAudit(db, {
+      actorUserId: c.get("adminUserId") ?? null,
+      action: "product.delete",
+      resourceType: "product",
+      resourceId: String(id),
+      changes: { before },
+    });
+    await invalidateProductCaches(before.slug);
+    return c.json({ success: true, id });
   });
 
   return router;

@@ -1,11 +1,11 @@
-import Image from "next/image";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
+import CategoryCardImage from "@/components/store/CategoryCardImage";
 
 interface CategoryCardProps {
     name: string;
     slug: string;
-    image: string;
+    image?: string | null;
     className?: string;
 }
 
@@ -20,13 +20,7 @@ export default function CategoryCard({
             href={`/category/${slug}`}
             className={`category-card group block aspect-[4/3] ${className}`}
         >
-            <Image
-                src={image}
-                alt={name}
-                fill
-                className="object-cover transition-transform duration-700 ease-out group-hover:scale-110"
-                sizes="(max-width: 640px) 85vw, (max-width: 1024px) 50vw, 25vw"
-            />
+            <CategoryCardImage src={image} alt={name} />
             <div className="category-card-content">
                 <h3 className="text-white text-base md:text-lg font-bold leading-snug">
                     {name}

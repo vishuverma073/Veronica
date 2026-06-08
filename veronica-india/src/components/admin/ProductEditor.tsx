@@ -1,25 +1,63 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, Controller, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { ChevronDown, Trash2, Plus, X, Loader2 } from "lucide-react";
+import { ChevronDown, Trash2, Plus, X, Loader2, Archive, Copy } from "lucide-react";
+import { z } from "zod";
 import {
   AdminProductCreateSchema,
+  MAX_MONEY_RUPEES,
   type AdminProductCreate,
   type Product,
 } from "@veronica/contracts";
-import { adminApi, AdminApiError } from "@/lib/admin-api";
-import { useCategories } from "@/lib/admin-hooks";
-import { tempId } from "@/lib/sku-matrix";
+import { adminApi, AdminApiError, type AdminListProduct } from "@/lib/admin-api";
+import { useCategories, useProducts } from "@/lib/admin-hooks";
+import { syncSkus, tempId } from "@/lib/sku-matrix";
+import { buildProductCategoryOptions } from "@/lib/category-tree";
 import { cn } from "@/lib/utils";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
+import ConfirmDialog from "./ConfirmDialog";
 import ImageUploader from "./ImageUploader";
 import VariantsEditor from "./VariantsEditor";
 
-function emptyProduct(): AdminProductCreate {
+const SkuFormRowSchema = z.object({
+  id: z.number(),
+  skuCode: z.string().min(1, "SKU code is required"),
+  price: z
+    .number({ error: "Enter a valid price" })
+    .nonnegative("Price cannot be negative")
+    .max(MAX_MONEY_RUPEES, `Price must be at most ₹${MAX_MONEY_RUPEES.toLocaleString("en-IN")}`)
+    .nullable(),
+  salePrice: z
+    .number()
+    .nonnegative("Sale price cannot be negative")
+    .max(MAX_MONEY_RUPEES, `Sale price must be at most ₹${MAX_MONEY_RUPEES.toLocaleString("en-IN")}`)
+    .nullable(),
+  dimensionValues: z.record(z.string(), z.string()),
+  attributes: z.record(z.string(), z.string()).optional(),
+  stock: z.number().int().nullable().optional(),
+});
+
+const ProductEditorFormSchema = AdminProductCreateSchema.omit({ skus: true }).extend({
+  skus: z
+    .array(
+      SkuFormRowSchema.refine((s) => s.price !== null, {
+        message: "Price is required",
+        path: ["price"],
+      }),
+    )
+    .min(1, "At least one SKU is required"),
+});
+
+type ProductFormValues = z.infer<typeof ProductEditorFormSchema>;
+
+function emptyProduct(): ProductFormValues {
+  const skuId = tempId();
   return {
     name: "",
     slug: "",
@@ -28,17 +66,25 @@ function emptyProduct(): AdminProductCreate {
     isBestseller: false,
     isNew: false,
     isFeatured: false,
-    status: "draft",
+    status: "active",
     tags: [],
     images: [],
     dimensions: [],
-    skus: [{ id: tempId(), skuCode: "SKU", price: 0, salePrice: null, dimensionValues: {} }],
+    skus: [
+      {
+        id: skuId,
+        skuCode: `NEW-${skuId}`,
+        price: null,
+        salePrice: null,
+        dimensionValues: {},
+      },
+    ],
     specifications: [],
     includedAccessories: [],
   };
 }
 
-function toFormValues(p: Product): AdminProductCreate {
+function toFormValues(p: Product): ProductFormValues {
   // Product → create payload (drop the server id; keep everything else).
   const { id: _id, ...rest } = p;
   void _id;
@@ -136,6 +182,9 @@ export default function ProductEditor({
   const isEdit = productId != null;
   const [loading, setLoading] = useState(isEdit);
   const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"delete" | "archive" | null>(null);
 
   const {
     register,
@@ -143,12 +192,11 @@ export default function ProductEditor({
     control,
     reset,
     watch,
+    getValues,
     setValue,
     formState: { errors, isSubmitting, isDirty },
-  } = useForm<AdminProductCreate>({
-    // Schema defaults make zod's input type diverge from the output type; the
-    // form operates on the resolved (output) shape, so cast the resolver.
-    resolver: zodResolver(AdminProductCreateSchema) as unknown as Resolver<AdminProductCreate>,
+  } = useForm<ProductFormValues>({
+    resolver: zodResolver(ProductEditorFormSchema) as unknown as Resolver<ProductFormValues>,
     // Preselect the category when adding from a category page (so it isn't 0,
     // which fails validation as "invalid request").
     defaultValues: defaultCategoryId
@@ -176,46 +224,132 @@ export default function ProductEditor({
   const skus = watch("skus");
   const specifications = watch("specifications") ?? [];
   const name = watch("name");
+  const slug = watch("slug");
+  const status = watch("status");
 
-  async function onSubmit(data: AdminProductCreate) {
+  useUnsavedChangesGuard(isDirty);
+
+  async function refreshProductLists() {
+    await mutate(
+      (key) => Array.isArray(key) && key[0] === "admin/products",
+      undefined,
+      { revalidate: true },
+    );
+  }
+
+  async function handleArchive() {
+    if (!isEdit || status === "archived") return;
+    setConfirmAction("archive");
+  }
+
+  async function performArchive() {
+    if (!isEdit) return;
+    setArchiving(true);
     try {
-      if (isEdit) {
-        await adminApi.updateProduct(productId, data);
-        await mutate(["admin/products", productId]);
-        toast.success("Product saved");
-      } else {
-        const created = await adminApi.createProduct(data);
-        toast.success("Product created");
-        router.push(`/admin/products/${created.id}/edit`);
-      }
-      await mutate(
-        (key) => Array.isArray(key) && key[0] === "admin/products",
-        undefined,
-        { revalidate: true },
-      );
-      reset(data); // clears dirty state
+      await adminApi.archiveProduct(productId);
+      await mutate(["admin/products", productId]);
+      await refreshProductLists();
+      reset({ ...getValues(), status: "archived" });
+      toast.success("Product archived", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              try {
+                await adminApi.restoreProduct(productId);
+                await refreshProductLists();
+                await mutate(["admin/products", productId]);
+                toast.success("Product restored");
+              } catch {
+                toast.error("Restore failed");
+              }
+            })();
+          },
+        },
+      });
+      router.push("/admin/products/archived");
     } catch (err) {
-      const msg = err instanceof AdminApiError ? err.message : "Save failed";
+      const msg = err instanceof AdminApiError ? err.message : "Archive failed";
       toast.error(msg);
+      setArchiving(false);
     }
   }
 
   async function handleDelete() {
     if (!isEdit) return;
-    if (!confirm("Delete this product? This cannot be undone.")) return;
+    setConfirmAction("delete");
+  }
+
+  async function performDelete() {
+    if (!isEdit) return;
     setDeleting(true);
     try {
       await adminApi.deleteProduct(productId);
-      await mutate(
-        (key) => Array.isArray(key) && key[0] === "admin/products",
-        undefined,
-        { revalidate: true },
-      );
+      await refreshProductLists();
       toast.success("Product deleted");
       router.push("/admin/products");
     } catch {
       toast.error("Delete failed");
       setDeleting(false);
+    }
+  }
+
+  async function handleDuplicate() {
+    if (!isEdit || duplicating) return;
+    setDuplicating(true);
+    try {
+      const data = getValues();
+      const copySuffix = Date.now().toString(36).slice(-4);
+      const payload: AdminProductCreate = {
+        ...data,
+        name: `${data.name.trim()} (Copy)`,
+        slug: "",
+        status: "draft",
+        isFeatured: false,
+        dimensions: data.dimensions.map((d) => ({
+          ...d,
+          id: tempId(),
+          values: d.values.map((v) => ({ ...v, id: tempId() })),
+        })),
+        skus: data.skus.map((s) => ({
+          ...s,
+          id: tempId(),
+          skuCode: `${s.skuCode}-${copySuffix}`,
+          price: s.price as number,
+        })),
+      };
+      const created = await adminApi.createProduct(payload);
+      await refreshProductLists();
+      toast.success("Product duplicated as draft");
+      router.push(`/admin/products/${created.id}/edit`);
+    } catch (err) {
+      const msg = err instanceof AdminApiError ? err.message : "Duplicate failed";
+      toast.error(msg);
+    } finally {
+      setDuplicating(false);
+    }
+  }
+
+  async function onSubmit(data: ProductFormValues) {
+    const payload: AdminProductCreate = {
+      ...data,
+      skus: data.skus.map((s) => ({ ...s, price: s.price as number })),
+    };
+    try {
+      if (isEdit) {
+        await adminApi.updateProduct(productId, payload);
+        await mutate(["admin/products", productId]);
+        toast.success("Product saved");
+      } else {
+        const created = await adminApi.createProduct(payload);
+        toast.success("Product created");
+        router.push(`/admin/products/${created.id}/edit`);
+      }
+      await refreshProductLists();
+      reset(data);
+    } catch (err) {
+      const msg = err instanceof AdminApiError ? err.message : "Save failed";
+      toast.error(msg);
     }
   }
 
@@ -237,9 +371,51 @@ export default function ProductEditor({
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-2xl pb-36 lg:pb-24 space-y-3">
-      <h1 className="text-xl font-bold text-text-primary mb-1">
-        {isEdit ? "Edit Product" : "Add New Product"}
-      </h1>
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <h1 className="text-xl font-bold text-text-primary">
+          {isEdit ? "Edit Product" : "Add New Product"}
+        </h1>
+        {isEdit && (
+          <div className="flex flex-wrap gap-2 shrink-0 justify-end">
+            {slug && status !== "archived" && (
+              <Link
+                href={`/product/${slug}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-secondary text-sm"
+              >
+                Preview
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleDuplicate()}
+              disabled={duplicating || deleting || archiving}
+              className="btn btn-secondary text-sm"
+            >
+              <Copy size={15} /> {duplicating ? "Duplicating…" : "Duplicate"}
+            </button>
+            {status !== "archived" && (
+              <button
+                type="button"
+                onClick={handleArchive}
+                disabled={archiving || deleting}
+                className="btn btn-secondary text-sm"
+              >
+                <Archive size={15} /> {archiving ? "Archiving…" : "Archive"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting || archiving}
+              className="btn text-sm bg-red-50 text-danger hover:bg-red-100 disabled:opacity-50"
+            >
+              <Trash2 size={15} /> {deleting ? "Deleting…" : "Delete"}
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Basics */}
       <Section title="Basics" defaultOpen>
@@ -263,10 +439,11 @@ export default function ProductEditor({
               <option value={0} disabled>
                 Select a category…
               </option>
-              {categories?.map((c) => (
+              {buildProductCategoryOptions(
+                (categories ?? []).filter((c) => c.status !== "archived"),
+              ).map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.parentId ? "— " : ""}
-                  {c.name}
+                  {c.label}
                 </option>
               ))}
             </select>
@@ -317,6 +494,12 @@ export default function ProductEditor({
               <option value="active">Active</option>
               <option value="archived">Archived</option>
             </select>
+            {status === "archived" && (
+              <p className="text-xs text-text-muted mt-1.5">
+                This product is hidden from the storefront. Set status to Active or Draft and save to
+                restore it.
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-2">
             {(["isBestseller", "isNew", "isFeatured"] as const).map((flag) => (
@@ -408,27 +591,33 @@ export default function ProductEditor({
         />
       </Section>
 
-      {/* Danger zone (edit only) */}
-      {isEdit && (
-        <Section title="Danger Zone">
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleting}
-            className="btn text-sm bg-red-50 text-danger hover:bg-red-100 disabled:opacity-50"
-          >
-            <Trash2 size={15} /> {deleting ? "Deleting…" : "Delete product"}
-          </button>
-        </Section>
-      )}
-
       {/* Sticky save bar — sits above the mobile bottom nav (~56px + safe-area),
           flush to the bottom on desktop where the nav is hidden. */}
-      <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom))] lg:bottom-0 inset-x-0 lg:left-60 z-40 bg-white border-t border-border px-4 pt-3 pb-3 lg:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] flex items-center justify-between">
-        <span className="text-xs text-text-muted">
+      <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom))] lg:bottom-0 inset-x-0 lg:left-60 z-40 bg-white border-t border-border px-4 pt-3 pb-3 lg:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] flex items-center justify-between gap-2">
+        <span className="text-xs text-text-muted min-w-0 truncate">
           {isSubmitting ? "Saving…" : isDirty ? "Unsaved changes" : "All changes saved"}
         </span>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
+          {isEdit && status !== "archived" && (
+            <button
+              type="button"
+              onClick={handleArchive}
+              disabled={archiving || deleting || isSubmitting}
+              className="btn btn-secondary text-sm"
+            >
+              <Archive size={15} /> Archive
+            </button>
+          )}
+          {isEdit && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting || archiving || isSubmitting}
+              className="btn text-sm bg-red-50 text-danger hover:bg-red-100 disabled:opacity-50"
+            >
+              <Trash2 size={15} /> Delete
+            </button>
+          )}
           <button
             type="button"
             onClick={() => router.push("/admin/products")}
@@ -445,6 +634,26 @@ export default function ProductEditor({
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmAction != null}
+        title={confirmAction === "archive" ? "Archive product?" : "Delete product?"}
+        message={
+          confirmAction === "archive"
+            ? "This hides the product from the storefront. You can restore it from the Archive page."
+            : "This product will be permanently deleted and cannot be recovered."
+        }
+        confirmLabel={confirmAction === "archive" ? "Archive" : "Delete"}
+        danger={confirmAction === "delete"}
+        loading={deleting || archiving}
+        onCancel={() => !deleting && !archiving && setConfirmAction(null)}
+        onConfirm={() => {
+          const action = confirmAction;
+          setConfirmAction(null);
+          if (action === "archive") void performArchive();
+          else if (action === "delete") void performDelete();
+        }}
+      />
     </form>
   );
 }
