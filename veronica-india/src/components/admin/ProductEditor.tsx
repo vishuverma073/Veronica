@@ -12,6 +12,7 @@ import { z } from "zod";
 import {
   AdminProductCreateSchema,
   MAX_MONEY_RUPEES,
+  VariantDimensionSchema,
   type AdminProductCreate,
   type Product,
 } from "@veronica/contracts";
@@ -43,7 +44,13 @@ const SkuFormRowSchema = z.object({
   stock: z.number().int().nullable().optional(),
 });
 
-const ProductEditorFormSchema = AdminProductCreateSchema.omit({ skus: true }).extend({
+const ProductEditorFormSchema = AdminProductCreateSchema.omit({
+  skus: true,
+  images: true,
+  dimensions: true,
+}).extend({
+  images: z.array(z.string()),
+  dimensions: z.array(VariantDimensionSchema),
   skus: z
     .array(
       SkuFormRowSchema.refine((s) => s.price !== null, {

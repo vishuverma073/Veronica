@@ -58,8 +58,14 @@ export const CategoryWithBreadcrumbSchema = CategorySchema.extend({
 });
 export type CategoryWithBreadcrumb = z.infer<typeof CategoryWithBreadcrumbSchema>;
 
-/** Admin create/update payloads. */
-export const AdminCategoryCreateSchema = CategorySchema.omit({ id: true }).partial({
+/** Admin create payload — status is server-assigned (defaults to active). */
+export const AdminCategoryCreateSchema = CategorySchema.omit({
+  id: true,
+  status: true,
+  childCount: true,
+  productCount: true,
+  subtreeProductCount: true,
+}).partial({
   description: true,
   sortOrder: true,
 });

@@ -172,7 +172,7 @@ export const adminHandlers = [
         })),
       })),
       skus: data.skus.map((s) => ({
-        id: s.id ?? allocChildId(),
+        id: allocChildId(),
         skuCode: s.skuCode,
         price: s.price,
         salePrice: s.salePrice,
